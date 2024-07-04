@@ -4,5 +4,9 @@
 class Color:
     WHITE = (255, 255, 255)
     BLACK = (0, 0, 0)
-    GRAY = (170, 170, 170)
-    DARK_GRAY = (85, 85, 85)
+    RED = (255, 0, 0)
+    GREEN = (0, 255, 0)
+    BLUE = (0, 0, 255)
+    CYAN = (0, 255, 255)
+    MAGENTA = (255, 0, 255)
+    YELLOW = (255, 255, 0)
