@@ -10,3 +10,6 @@ class Color:
     CYAN = (0, 255, 255)
     MAGENTA = (255, 0, 255)
     YELLOW = (255, 255, 0)
+
+    THRUST = (40, 20, 0)
+    ARENA_EDGE = (64, 64, 64)
