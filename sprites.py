@@ -11,6 +11,12 @@ from typing import Sequence, Hashable
 
 EQUILATERAL_TRIANGLE_HEIGHT_FACTOR = 0.866
 
+TRIANGLE_TRIANGLES = (
+    ((0, -25), (23, 15)),
+    ((0, -25), (-23, 15)),
+    ((23, 15), (-23, 15)),
+)
+
 SQUARE_TRIANGLES = (
     ((0, -40), (40, 0)),
     ((40, 0), (0, 40)),
@@ -39,12 +45,21 @@ PLAYER_THRUST_ACC = 500
 PLAYER_BULLET_RADIUS = 5
 PLAYER_BULLET_SPEED = 500
 PLAYER_FIRE_RATE = 500
+PLAYER_RADIUS = 15
 
 ARENA_BOUNCE = 0.8
 
+BULLET_DAMAGE = 10
 
-def darken(color: tuple[int, int, int], amount: float) -> pg.Color:
+DAMAGE_FLASH_MS = 200
+
+
+def darken(color: tuple[int, int, int] | pg.Color, amount: float) -> pg.Color:
     return pg.Color(color).lerp(Color.BLACK, amount)
+
+
+def lighten(color: tuple[int, int, int] | pg.Color, amount: float) -> pg.Color:
+    return pg.Color(color).lerp(Color.WHITE, amount)
 
 
 def centroid(points: Sequence[Sequence[float]]) -> tuple[float, float]:
@@ -52,10 +67,10 @@ def centroid(points: Sequence[Sequence[float]]) -> tuple[float, float]:
 
 
 class ThrustParticle(utils.Particle):
-    def __init__(self, pos: Sequence[float], vel: Sequence[float], radius: int):
+    def __init__(self, pos: Sequence[float], vel: Sequence[float]):
         self.pos = pg.Vector2(pos)  # noqa
         self.vel = pg.Vector2(vel)  # noqa
-        self.radius = radius
+        self.radius = random.randint(3, 5)
         self.start_time = pg.time.get_ticks()
         self.life_time = random.randint(200, 350)
 
@@ -80,6 +95,13 @@ class Bullet(utils.Particle):
     def update(self, dt: float, *args, **kwargs) -> bool:
         if self.pos.length_squared() > kwargs["arena_radius"] ** 2:
             return False
+        for game_object in kwargs["game_objects"]:
+            if (self.pos - game_object.pos).length_squared() < game_object.radius ** 2:
+                game_object.health -= BULLET_DAMAGE
+                if game_object.health > 0:
+                    kwargs["ex_sound"].play()
+                game_object.last_hit = pg.time.get_ticks()
+                return False
         self.pos += self.vel * dt
         return True
 
@@ -90,15 +112,40 @@ class Bullet(utils.Particle):
         return Color.GREEN
 
 
+class DebrisParticle(utils.Particle):
+    def __init__(self, pos: Sequence[float], vel: Sequence[float], color):
+        self.pos = pg.Vector2(pos)  # noqa
+        self.vel = pg.Vector2(vel)  # noqa
+        self.color = color
+        self.radius = random.randint(2, 4)
+        self.start_time = pg.time.get_ticks()
+        self.life_time = random.randint(350, 500)
+
+    def update(self, dt: float, *args, **kwargs) -> bool:
+        if pg.time.get_ticks() - self.start_time >= self.life_time:
+            return False
+        self.pos += self.vel * dt
+        return True
+
+    def draw_pos(self, image: pg.Surface) -> Sequence[float]:
+        return self.pos - (self.radius, self.radius)
+
+    def cache_lookup(self) -> Hashable:
+        return self.radius, self.color
+
+
 class GameObject:
-    def __init__(self, pos: Sequence[float], polygons, color):
+    def __init__(self, pos: Sequence[float], polygons, color, radius: int = 20, max_health: int = 100):
         self.pos = pg.Vector2(pos)  # noqa
         self.angle = 0
         self.polygons = polygons
         self.color = color
+        self.radius = radius
+        self.health = max_health
+        self.last_hit = 0
 
-    def update(self, dt: float, arena_radius: int):
-        pass
+    def update(self, dt: float, arena_radius: int, **kwargs) -> bool:
+        return True
 
     def draw(self, screen: pg.Surface, light_source: Sequence[float], camera: Sequence[float]):
         # Draw each polygon separately.
@@ -117,25 +164,37 @@ class GameObject:
             lighting = pg.math.remap(-1, 1, 0.75, 0, lighting_vector * normal_vector)
             # Transform the world coordinates into screen coordinates.
             draw_points = [point + camera for point in points]  # noqa
+            # Sometimes lighting falls outside range, so we clamp it again to [0, 1].
+            color = darken(self.color, pg.math.clamp(lighting, 0, 1))
+            # Lighten the color for the flash animation when taking damage.
+            if pg.time.get_ticks() - self.last_hit < DAMAGE_FLASH_MS:
+                color = lighten(color, 0.5)
             # Draw the solid face.
-            pg.draw.polygon(screen, darken(self.color, lighting), draw_points)
+            pg.draw.polygon(screen, color, draw_points)
             # Draw the outline.
             pg.draw.aalines(screen, self.color, True, draw_points)
 
 
 class Asteroid(GameObject):
-    def __init__(self, pos: Sequence[float], polygons, color, turn_speed):
-        super().__init__(pos, polygons, color)
+    def __init__(self, pos: Sequence[float], polygons, color, turn_speed, radius):
+        super().__init__(pos, polygons, color, radius)
         self.turn_speed = turn_speed
 
-    def update(self, dt: float, arena_radius: int):
+    def update(self, dt: float, arena_radius: int, **kwargs) -> bool:
+        if self.health <= 0:
+            for _ in range(40):
+                vel_vector = utils.polar_vector(-random.randint(60, 120), random.randrange(360))
+                kwargs["debris"].add(DebrisParticle(self.pos, vel_vector, self.color))
+            kwargs["sound"].play()
+            return False
         self.angle += self.turn_speed * dt
         self.angle %= 360
+        return True
 
 
 class Player(GameObject):
     def __init__(self, pos: Sequence[float], polygons, color):
-        super().__init__(pos, polygons, color)
+        super().__init__(pos, polygons, color, PLAYER_RADIUS)
         self.acc = pg.Vector2(0, 0)
         self.vel = pg.Vector2(0, 0)
         self.thrusting = False
@@ -143,7 +202,7 @@ class Player(GameObject):
         self.gun_pos = self.pos + pg.Vector2(PLAYER_GUN_POS).rotate(self.angle)
         self.last_fire = 0
 
-    def update(self, dt: float, arena_radius: int):
+    def update(self, dt: float, arena_radius: int, **kwargs) -> bool:
         self.thrust_pos = self.pos + pg.Vector2(PLAYER_THRUSTER_POS).rotate(self.angle)
         self.gun_pos = self.pos + pg.Vector2(PLAYER_GUN_POS).rotate(self.angle)
         if self.thrusting:
@@ -155,3 +214,4 @@ class Player(GameObject):
         if self.pos.length_squared() > arena_radius ** 2:
             self.pos.scale_to_length(arena_radius)
             self.vel = self.vel.reflect(self.pos) * ARENA_BOUNCE
+        return True

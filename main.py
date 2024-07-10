@@ -3,6 +3,7 @@
 import random
 import functools
 import sys
+from pathlib import Path
 
 import pygame as pg
 
@@ -10,6 +11,9 @@ import utils
 import sprites
 
 from colors import Color
+
+APPLICATION_DIRECTORY = Path(__file__, "..").resolve()
+SOUND_DIRECTORY = APPLICATION_DIRECTORY / "sounds"
 
 LEFT_MOUSE_BUTTON = 1
 WINDOWED_RESOLUTION = pg.Vector2(800, 600)
@@ -21,6 +25,10 @@ ARENA_EDGE_THICKNESS = 20
 
 def main() -> None:
     pg.init()
+
+    explosion_sound = pg.mixer.Sound(SOUND_DIRECTORY / "explosion.wav")
+    fire_sound = pg.mixer.Sound(SOUND_DIRECTORY / "fire_gun.wav")
+    asteroid_break_sound = pg.mixer.Sound(SOUND_DIRECTORY / "asteroid_break.wav")
 
     utils.setup_window("Polybius Rex")
     fullscreen = True
@@ -34,8 +42,9 @@ def main() -> None:
 
     game_objects = [
         # Set up the level.
-        sprites.Asteroid((100, 100), sprites.HEXAGON_TRIANGLES, Color.WHITE, 20),
-        sprites.Asteroid((0, 0), sprites.SQUARE_TRIANGLES, Color.YELLOW, -40),
+        sprites.Asteroid((100, 100), sprites.HEXAGON_TRIANGLES, Color.WHITE, 20, 35),
+        sprites.Asteroid((-100, -100), sprites.SQUARE_TRIANGLES, Color.YELLOW, -40, 35),
+        sprites.Asteroid((-200, 200), sprites.TRIANGLE_TRIANGLES, Color.MAGENTA, 80, 20),
 
         # Create and reference the player object.
         player := sprites.Player((0, 0), sprites.PLAYER_POLYGONS, Color.GREEN),
@@ -49,6 +58,11 @@ def main() -> None:
         return utils.make_circle_image(sprites.PLAYER_BULLET_RADIUS, color, Color.BLACK)
 
     bullets = utils.ParticleGroup(utils.ImageCache(make_bullet_image))  # noqa
+
+    def make_debris_image(item: tuple[int, tuple[int, int, int]]) -> pg.Surface:
+        return utils.make_circle_image(item[0], item[1], Color.BLACK)
+
+    debris_particles = utils.ParticleGroup(utils.ImageCache(make_debris_image))  # noqa
 
     while True:
         for event in pg.event.get():
@@ -81,22 +95,22 @@ def main() -> None:
 
         # Spawn particles.
         if player.thrusting:
-            vel_vector = pg.Vector2()
-            vel_vector.from_polar((random.randint(150, 200), player.angle + 90 + random.randint(-15, 15)))
-            thrust_particles.add(sprites.ThrustParticle(player.thrust_pos, player.vel + vel_vector, random.randint(3, 5)))
+            vel_vector = utils.polar_vector(random.randint(150, 200), player.angle + 90 + random.randint(-15, 15))
+            thrust_particles.add(sprites.ThrustParticle(player.thrust_pos, player.vel + vel_vector))
 
             if pg.time.get_ticks() - player.last_fire >= sprites.PLAYER_FIRE_RATE:
+                fire_sound.play()
                 player.last_fire = pg.time.get_ticks()
-                vel_vector = pg.Vector2()
-                vel_vector.from_polar((-sprites.PLAYER_BULLET_SPEED, player.angle + 90))
+                vel_vector = utils.polar_vector(-sprites.PLAYER_BULLET_SPEED, player.angle + 90)
                 bullets.add(sprites.Bullet(player.gun_pos, player.vel + vel_vector))
 
         # Update objects and particles.
-        for game_object in game_objects:
-            game_object.update(dt, ARENA_RADIUS)
+        game_objects = [go for go in game_objects if go.update(dt, ARENA_RADIUS,
+                                                               debris=debris_particles, sound=asteroid_break_sound)]
 
         thrust_particles.update(dt)
-        bullets.update(dt, arena_radius=ARENA_RADIUS)
+        debris_particles.update(dt)
+        bullets.update(dt, arena_radius=ARENA_RADIUS, game_objects=game_objects, ex_sound=explosion_sound)
 
         # Do camera calculations.
         screen_middle = pg.Vector2(screen.size) / 2
@@ -110,8 +124,11 @@ def main() -> None:
 
         for game_object in game_objects:
             game_object.draw(screen, light_source, camera)
+            if debug:
+                pg.draw.circle(screen, Color.CYAN, game_object.pos + camera, game_object.radius, 1)
 
         thrust_particles.draw(screen, camera)
+        debris_particles.draw(screen, camera)
         bullets.draw(screen, camera)
 
         if debug:

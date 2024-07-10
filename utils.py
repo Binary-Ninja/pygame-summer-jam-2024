@@ -8,6 +8,13 @@ import pygame as pg
 from typing import Optional, Sequence, Callable, Hashable, Iterable
 
 
+def polar_vector(length: float, angle: float) -> pg.Vector2:
+    """Return a Vector2 with the given length and angle in degrees."""
+    vec = pg.Vector2()
+    vec.from_polar((length, angle))
+    return vec
+
+
 def load_image(filename: str | Path, convert: bool = True, alpha: bool = False) -> pg.Surface:
     """Load and return a ``Surface`` object from the given filename.
 
