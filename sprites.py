@@ -39,6 +39,13 @@ PLAYER_POLYGONS = (
     ((-10, 20), (0, 10), (10, 20)),
 )
 
+HP_POLYGON = (
+    (0, -10),
+    (-5, 10),
+    (0, 5),
+    (5, 10),
+)
+
 PLAYER_THRUSTER_POS = (0, 10)
 PLAYER_GUN_POS = (0, -20)
 PLAYER_THRUST_ACC = 500
@@ -51,7 +58,9 @@ ENEMY_THRUST_ACC = 250
 
 ARENA_BOUNCE = 0.8
 
-BULLET_DAMAGE = 10
+BULLET_DAMAGE = 1
+BOUNCE_DAMAGE = 1
+BOUNCE_I_FRAMES = 200
 
 DAMAGE_FLASH_MS = 200
 
@@ -127,15 +136,18 @@ class ThrustParticle(utils.Particle):
 
 
 class Bullet(utils.Particle):
-    def __init__(self, pos: Sequence[float], vel: Sequence[float]):
+    def __init__(self, pos: Sequence[float], vel: Sequence[float], owner: "GameObject"):
         self.pos = pg.Vector2(pos)  # noqa
         self.vel = pg.Vector2(vel)  # noqa
+        self.owner = owner
 
     def update(self, dt: float, *args, **kwargs) -> bool:
         if self.pos.length_squared() > kwargs["arena_radius"] ** 2:
             return False
         for game_object in kwargs["game_objects"]:
-            if (self.pos - game_object.pos).length_squared() < game_object.radius ** 2:
+            if game_object is self.owner:
+                continue
+            if self.pos.distance_squared_to(game_object.pos) < game_object.radius ** 2:
                 game_object.health -= BULLET_DAMAGE
                 if game_object.health > 0:
                     kwargs["sounds"].play(ASTEROID_HIT_SOUND)
@@ -174,8 +186,9 @@ class DebrisParticle(utils.Particle):
 
 
 class GameObject:
-    def __init__(self, pos: Sequence[float], polygons, color, radius: int = 20, max_health: int = 100):
+    def __init__(self, pos: Sequence[float], polygons, color, radius: int = 20, max_health: int = 10, vel=(0, 0)):
         self.pos = pg.Vector2(pos)  # noqa
+        self.vel = pg.Vector2(vel)  # noqa
         self.angle = 0
         self.polygons = polygons
         self.color = color
@@ -183,7 +196,36 @@ class GameObject:
         self.health = max_health
         self.last_hit = 0
 
-    def update(self, dt: float, arena_radius: int, **kwargs) -> bool:
+    def update(self, dt: float, arena_radius: int, objects, sounds, **kwargs) -> bool:
+        self.pos += self.vel * dt
+        if self.pos.length_squared() > arena_radius ** 2:
+            self.pos.scale_to_length(arena_radius)
+            self.vel = self.vel.reflect(self.pos) * ARENA_BOUNCE
+        for go in objects:
+            if go is self:
+                continue
+            if self.pos.distance_squared_to(go.pos) < (self.radius + go.radius) ** 2:
+                # Decrease health if i-frames allow.
+                ticks = pg.time.get_ticks()
+                if ticks - self.last_hit >= BOUNCE_I_FRAMES:
+                    self.last_hit = ticks
+                    self.health -= BOUNCE_DAMAGE
+                if ticks - go.last_hit >= BOUNCE_I_FRAMES:
+                    go.last_hit = ticks
+                    go.health -= BOUNCE_DAMAGE
+                # Play sound if player.
+                if self is kwargs["p"] or go is kwargs["p"]:
+                    sounds.play(ASTEROID_HIT_SOUND)
+                # Move self away so they are no longer colliding.
+                unstick_vector = self.pos - go.pos
+                unstick_vector.scale_to_length(self.radius + go.radius - self.pos.distance_to(go.pos))
+                self.pos += unstick_vector
+                # Bounce the objects.
+                tangent_vector = pg.Vector2(go.pos.y - self.pos.y, -(go.pos.x - self.pos.x)).normalize()
+                rel_vel = self.vel - go.vel
+                vel = rel_vel - tangent_vector * (rel_vel * tangent_vector)
+                self.vel -= vel
+                go.vel += vel
         return True
 
     def draw(self, screen: pg.Surface, light_source: Sequence[float], camera: Sequence[float]):
@@ -215,33 +257,44 @@ class GameObject:
 
 
 class Asteroid(GameObject):
-    def __init__(self, pos: Sequence[float], polygons, color, turn_speed, radius):
-        super().__init__(pos, polygons, color, radius)
+    def __init__(self, pos: Sequence[float], polygons, color, turn_speed, radius, vel=(0, 0), hp: int = 10):
+        super().__init__(pos, polygons, color, radius, vel=vel)
+        self.health = hp
         self.turn_speed = turn_speed
 
-    def update(self, dt: float, arena_radius: int, **kwargs) -> bool:
+    def update(self, dt: float, arena_radius: int, objects, sounds, **kwargs) -> bool:
         if self.health <= 0:
             for _ in range(40):
                 vel_vector = utils.polar_vector(-random.randint(60, 120), random.randrange(360))
-                kwargs["debris"].add(DebrisParticle(self.pos, vel_vector, self.color))
-            kwargs["sounds"].play(ASTEROID_BREAK_SOUND)
+                kwargs["d"].add(DebrisParticle(self.pos, vel_vector, self.color))
+            sounds.play(ASTEROID_BREAK_SOUND)
             return False
         self.angle += self.turn_speed * dt
         self.angle %= 360
+        super().update(dt, arena_radius, objects, sounds, **kwargs)
         return True
 
 
 class Player(GameObject):
     def __init__(self, pos: Sequence[float], polygons, color):
         super().__init__(pos, polygons, color, PLAYER_RADIUS)
-        self.acc = pg.Vector2(0, 0)
-        self.vel = pg.Vector2(0, 0)
+        self.acc = pg.Vector2()
         self.thrusting = False
         self.thrust_pos = self.pos + pg.Vector2(PLAYER_THRUSTER_POS).rotate(self.angle)
         self.gun_pos = self.pos + pg.Vector2(PLAYER_GUN_POS).rotate(self.angle)
         self.last_fire = 0
+        self.dead = False
 
-    def update(self, dt: float, arena_radius: int, **kwargs) -> bool:
+    def update(self, dt: float, arena_radius: int, objects, sounds, **kwargs) -> bool:
+        if self.dead:
+            return True
+        if self.health <= 0:
+            for _ in range(40):
+                vel_vector = utils.polar_vector(-random.randint(60, 120), random.randrange(360))
+                kwargs["d"].add(DebrisParticle(self.pos, vel_vector, self.color))
+            sounds.play(ASTEROID_BREAK_SOUND)
+            self.dead = True
+            self.thrusting = False
         self.thrust_pos = self.pos + pg.Vector2(PLAYER_THRUSTER_POS).rotate(self.angle)
         self.gun_pos = self.pos + pg.Vector2(PLAYER_GUN_POS).rotate(self.angle)
         if self.thrusting:
@@ -249,33 +302,31 @@ class Player(GameObject):
         else:
             self.acc = pg.Vector2()
         self.vel += self.acc * dt
-        self.pos += self.vel * dt
-        if self.pos.length_squared() > arena_radius ** 2:
-            self.pos.scale_to_length(arena_radius)
-            self.vel = self.vel.reflect(self.pos) * ARENA_BOUNCE
+        super().update(dt, arena_radius, objects, sounds, **kwargs)
         return True
+
+    def draw(self, screen: pg.Surface, light_source: Sequence[float], camera: Sequence[float]):
+        if not self.dead:
+            super().draw(screen, light_source, camera)
 
 
 class EnemyShip(GameObject):
-    def __init__(self, pos: Sequence[float], polygons, color, target: GameObject):
-        super().__init__(pos, polygons, color)
+    def __init__(self, pos: Sequence[float], polygons, color, radius, hp: int, target: GameObject):
+        super().__init__(pos, polygons, color, radius)
+        self.health = hp
         self.target = target
         self.acc = pg.Vector2()
-        self.vel = pg.Vector2()
 
-    def update(self, dt: float, arena_radius: int, **kwargs) -> bool:
+    def update(self, dt: float, arena_radius: int, objects, sounds, **kwargs) -> bool:
         if self.health <= 0:
             for _ in range(40):
                 vel_vector = utils.polar_vector(-random.randint(60, 120), random.randrange(360))
-                kwargs["debris"].add(DebrisParticle(self.pos, vel_vector, self.color))
-            kwargs["sounds"].play(ASTEROID_BREAK_SOUND)
+                kwargs["d"].add(DebrisParticle(self.pos, vel_vector, self.color))
+            sounds.play(ASTEROID_BREAK_SOUND)
             return False
         self.angle = pg.Vector2().angle_to(self.target.pos - self.pos) + 90
         self.acc = self.target.pos - self.pos
         self.acc.scale_to_length(ENEMY_THRUST_ACC)
         self.vel += self.acc * dt
-        self.pos += self.vel * dt
-        if self.pos.length_squared() > arena_radius ** 2:
-            self.pos.scale_to_length(arena_radius)
-            self.vel = self.vel.reflect(self.pos) * ARENA_BOUNCE
+        super().update(dt, arena_radius, objects, sounds, **kwargs)
         return True

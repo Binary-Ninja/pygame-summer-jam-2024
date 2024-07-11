@@ -13,3 +13,4 @@ class Color:
 
     THRUST = (40, 20, 0)
     ARENA_EDGE = (64, 64, 64)
+    DAMAGE_FLASH = (40, 0, 0)
