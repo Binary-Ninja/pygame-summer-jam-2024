@@ -47,11 +47,16 @@ PLAYER_BULLET_SPEED = 500
 PLAYER_FIRE_RATE = 500
 PLAYER_RADIUS = 15
 
+ENEMY_THRUST_ACC = 250
+
 ARENA_BOUNCE = 0.8
 
 BULLET_DAMAGE = 10
 
 DAMAGE_FLASH_MS = 200
+
+ASTEROID_HIT_SOUND = "explosion.wav"
+ASTEROID_BREAK_SOUND = "asteroid_break.wav"
 
 
 def darken(color: tuple[int, int, int] | pg.Color, amount: float) -> pg.Color:
@@ -64,6 +69,40 @@ def lighten(color: tuple[int, int, int] | pg.Color, amount: float) -> pg.Color:
 
 def centroid(points: Sequence[Sequence[float]]) -> tuple[float, float]:
     return sum(p[0] for p in points) / len(points), sum(p[1] for p in points) / len(points)
+
+
+class Button:
+    def __init__(self, y_offset: int):
+        self.y_offset = y_offset
+        self.rect = pg.Rect(0, 0, 0, 50)
+        self.hover = False
+        self.pressed = False
+
+    def update(self) -> bool:
+        self.hover = False
+        if self.rect.collidepoint(pg.mouse.get_pos()):
+            self.hover = True
+            if pg.mouse.get_pressed()[0]:
+                self.pressed = True
+            elif self.pressed:  # Mouse was released over the button.
+                self.pressed = False
+                return True
+        else:
+            self.pressed = False
+        return False
+
+    def draw(self, screen: pg.Surface, font: pg.Font, text: str, color=Color.WHITE):
+        if self.hover:
+            color = Color.CYAN
+        if self.pressed:
+            color = Color.GREEN
+        text_surf = font.render(text, True, color, Color.BLACK)
+        self.rect.width = text_surf.width + 20
+        self.rect.centerx = screen.get_rect().centerx  # noqa
+        self.rect.centery = screen.get_rect().centery + self.y_offset  # noqa
+        pg.draw.rect(screen, Color.BLACK, self.rect, 0, 15)
+        pg.draw.rect(screen, color, self.rect, 2, 15)
+        screen.blit(text_surf, text_surf.get_rect(center=self.rect.center))
 
 
 class ThrustParticle(utils.Particle):
@@ -99,7 +138,7 @@ class Bullet(utils.Particle):
             if (self.pos - game_object.pos).length_squared() < game_object.radius ** 2:
                 game_object.health -= BULLET_DAMAGE
                 if game_object.health > 0:
-                    kwargs["ex_sound"].play()
+                    kwargs["sounds"].play(ASTEROID_HIT_SOUND)
                 game_object.last_hit = pg.time.get_ticks()
                 return False
         self.pos += self.vel * dt
@@ -185,7 +224,7 @@ class Asteroid(GameObject):
             for _ in range(40):
                 vel_vector = utils.polar_vector(-random.randint(60, 120), random.randrange(360))
                 kwargs["debris"].add(DebrisParticle(self.pos, vel_vector, self.color))
-            kwargs["sound"].play()
+            kwargs["sounds"].play(ASTEROID_BREAK_SOUND)
             return False
         self.angle += self.turn_speed * dt
         self.angle %= 360
@@ -209,6 +248,31 @@ class Player(GameObject):
             self.acc.from_polar((-PLAYER_THRUST_ACC, self.angle + 90))
         else:
             self.acc = pg.Vector2()
+        self.vel += self.acc * dt
+        self.pos += self.vel * dt
+        if self.pos.length_squared() > arena_radius ** 2:
+            self.pos.scale_to_length(arena_radius)
+            self.vel = self.vel.reflect(self.pos) * ARENA_BOUNCE
+        return True
+
+
+class EnemyShip(GameObject):
+    def __init__(self, pos: Sequence[float], polygons, color, target: GameObject):
+        super().__init__(pos, polygons, color)
+        self.target = target
+        self.acc = pg.Vector2()
+        self.vel = pg.Vector2()
+
+    def update(self, dt: float, arena_radius: int, **kwargs) -> bool:
+        if self.health <= 0:
+            for _ in range(40):
+                vel_vector = utils.polar_vector(-random.randint(60, 120), random.randrange(360))
+                kwargs["debris"].add(DebrisParticle(self.pos, vel_vector, self.color))
+            kwargs["sounds"].play(ASTEROID_BREAK_SOUND)
+            return False
+        self.angle = pg.Vector2().angle_to(self.target.pos - self.pos) + 90
+        self.acc = self.target.pos - self.pos
+        self.acc.scale_to_length(ENEMY_THRUST_ACC)
         self.vel += self.acc * dt
         self.pos += self.vel * dt
         if self.pos.length_squared() > arena_radius ** 2:

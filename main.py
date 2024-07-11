@@ -14,6 +14,8 @@ from colors import Color
 
 APPLICATION_DIRECTORY = Path(__file__, "..").resolve()
 SOUND_DIRECTORY = APPLICATION_DIRECTORY / "sounds"
+FONT_PATH = APPLICATION_DIRECTORY / "Kenney_Future_Narrow.ttf"
+FIRE_GUN_SOUND = "fire_gun.wav"
 
 LEFT_MOUSE_BUTTON = 1
 WINDOWED_RESOLUTION = pg.Vector2(800, 600)
@@ -26,16 +28,21 @@ ARENA_EDGE_THICKNESS = 20
 def main() -> None:
     pg.init()
 
-    explosion_sound = pg.mixer.Sound(SOUND_DIRECTORY / "explosion.wav")
-    fire_sound = pg.mixer.Sound(SOUND_DIRECTORY / "fire_gun.wav")
-    asteroid_break_sound = pg.mixer.Sound(SOUND_DIRECTORY / "asteroid_break.wav")
+    sounds = utils.Sounds(SOUND_DIRECTORY, True)
 
     utils.setup_window("Polybius Rex")
     fullscreen = True
     screen = utils.create_display(WINDOWED_RESOLUTION, fullscreen)
     clock = pg.time.Clock()
-    font = pg.Font(size=24)
+    font = pg.Font(FONT_PATH, 24)
     debug = False
+    paused = False
+
+    # Create the pause menu buttons.
+    resume_button = sprites.Button(-150)
+    sounds_button = sprites.Button(-50)
+    fullscreen_button = sprites.Button(50)
+    quit_button = sprites.Button(150)
 
     # The center of the arena is the light source, so you can always locate it.
     light_source = (0, 0)
@@ -48,6 +55,9 @@ def main() -> None:
 
         # Create and reference the player object.
         player := sprites.Player((0, 0), sprites.PLAYER_POLYGONS, Color.GREEN),
+
+        # Create the enemies.
+        sprites.EnemyShip((0, -200), sprites.TRIANGLE_TRIANGLES, Color.RED, player),
     ]
 
     # Particle groups.
@@ -76,12 +86,18 @@ def main() -> None:
                         pg.quit()
                         sys.exit()
 
+                if event.key == pg.K_ESCAPE:
+                    paused = not paused
+
                 if event.key == pg.K_F3:
                     debug = not debug
 
                 if event.key == pg.K_F4:
                     fullscreen = not fullscreen
                     screen = utils.create_display(WINDOWED_RESOLUTION, fullscreen)
+
+                if event.key == pg.K_m:
+                    sounds.muted = not sounds.muted
 
             if event.type == pg.MOUSEBUTTONDOWN:
                 if event.button == LEFT_MOUSE_BUTTON:
@@ -91,31 +107,49 @@ def main() -> None:
                 if event.button == LEFT_MOUSE_BUTTON:
                     player.thrusting = False
 
+        # Tick the clock.
         dt = clock.tick(FPS_CAP) / 1000
 
-        # Spawn particles.
-        if player.thrusting:
-            vel_vector = utils.polar_vector(random.randint(150, 200), player.angle + 90 + random.randint(-15, 15))
-            thrust_particles.add(sprites.ThrustParticle(player.thrust_pos, player.vel + vel_vector))
+        # Update the game state.
+        if not paused:
+            # Spawn particles.
+            if player.thrusting:
+                vel_vector = utils.polar_vector(random.randint(150, 200), player.angle + 90 + random.randint(-15, 15))
+                thrust_particles.add(sprites.ThrustParticle(player.thrust_pos, player.vel + vel_vector))
 
-            if pg.time.get_ticks() - player.last_fire >= sprites.PLAYER_FIRE_RATE:
-                fire_sound.play()
-                player.last_fire = pg.time.get_ticks()
-                vel_vector = utils.polar_vector(-sprites.PLAYER_BULLET_SPEED, player.angle + 90)
-                bullets.add(sprites.Bullet(player.gun_pos, player.vel + vel_vector))
+                if pg.time.get_ticks() - player.last_fire >= sprites.PLAYER_FIRE_RATE:
+                    sounds.play(FIRE_GUN_SOUND)
+                    player.last_fire = pg.time.get_ticks()
+                    vel_vector = utils.polar_vector(-sprites.PLAYER_BULLET_SPEED, player.angle + 90)
+                    bullets.add(sprites.Bullet(player.gun_pos, player.vel + vel_vector))
 
-        # Update objects and particles.
-        game_objects = [go for go in game_objects if go.update(dt, ARENA_RADIUS,
-                                                               debris=debris_particles, sound=asteroid_break_sound)]
+            # Update objects and particles.
+            game_objects = [go for go in game_objects if go.update(dt, ARENA_RADIUS,
+                                                                   debris=debris_particles, sounds=sounds)]
 
-        thrust_particles.update(dt)
-        debris_particles.update(dt)
-        bullets.update(dt, arena_radius=ARENA_RADIUS, game_objects=game_objects, ex_sound=explosion_sound)
+            thrust_particles.update(dt)
+            debris_particles.update(dt)
+            bullets.update(dt, arena_radius=ARENA_RADIUS, game_objects=game_objects, sounds=sounds)
+        # Update the menu.
+        else:
+            if resume_button.update():
+                paused = False
+            if sounds_button.update():
+                sounds.muted = not sounds.muted
+            if fullscreen_button.update():
+                fullscreen = not fullscreen
+                screen = utils.create_display(WINDOWED_RESOLUTION, fullscreen)
+            if quit_button.update():
+                pg.quit()
+                sys.exit()
 
-        # Do camera calculations.
+        # Update the camera.
         screen_middle = pg.Vector2(screen.size) / 2
         camera = screen_middle - player.pos
-        player.angle = pg.Vector2().angle_to(pg.mouse.get_pos() - screen_middle) + 90
+
+        # Rotate the player to face the mouse.
+        if not paused:
+            player.angle = pg.Vector2().angle_to(pg.mouse.get_pos() - screen_middle) + 90
 
         # Draw everything.
         screen.fill(SCREEN_BACKGROUND_COLOR)
@@ -130,6 +164,12 @@ def main() -> None:
         thrust_particles.draw(screen, camera)
         debris_particles.draw(screen, camera)
         bullets.draw(screen, camera)
+
+        if paused:
+            resume_button.draw(screen, font, " (ESC) RESUME")
+            sounds_button.draw(screen, font, f" (M) SOUNDS: {"OFF" if sounds.muted else "ON"}")
+            fullscreen_button.draw(screen, font, f" (F4) FULLSCREEN: {"ON" if fullscreen else "OFF"}")
+            quit_button.draw(screen, font, " (CTRL+Q) QUIT", Color.RED)
 
         if debug:
             fps_surf = font.render(f"{clock.get_fps():.2f}", True, Color.WHITE, Color.BLACK)

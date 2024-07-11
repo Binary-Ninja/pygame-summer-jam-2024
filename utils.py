@@ -8,6 +8,19 @@ import pygame as pg
 from typing import Optional, Sequence, Callable, Hashable, Iterable
 
 
+class Sounds:
+    def __init__(self, sound_folder: Path, muted: bool = False):
+        self.muted = muted
+        self.sounds: dict[str, pg.mixer.Sound] = {}
+        for path in sound_folder.iterdir():
+            if path.is_file():
+                self.sounds[path.name] = pg.mixer.Sound(path)
+
+    def play(self, sound: str):
+        if not self.muted:
+            self.sounds[sound].play()
+
+
 def polar_vector(length: float, angle: float) -> pg.Vector2:
     """Return a Vector2 with the given length and angle in degrees."""
     vec = pg.Vector2()
