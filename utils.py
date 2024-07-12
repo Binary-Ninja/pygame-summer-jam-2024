@@ -69,13 +69,14 @@ def create_display(size: Sequence[float], fullscreen: bool, flags: int = 0) -> p
     return pg.display.set_mode(size, flags)  # noqa
 
 
-def make_circle_image(radius: int, color: Sequence[int], trans_color: Optional[Sequence[int]] = None) -> pg.Surface:
+def make_circle_image(radius: int, color: Sequence[int],
+                      trans_color: Optional[Sequence[int]] = None, width: int = 0) -> pg.Surface:
     """Create and return an image with a colored circle and an optional color key.
 
     The surface size is ``(radius*2,radius*2)``.
     """
     image = pg.Surface((radius * 2, radius * 2))
-    pg.draw.circle(image, color, (radius, radius), radius)  # noqa
+    pg.draw.circle(image, color, (radius, radius), radius, width)  # noqa
     if trans_color is not None:
         image.set_colorkey(trans_color)  # noqa
     return image

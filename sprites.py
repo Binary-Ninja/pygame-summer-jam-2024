@@ -310,6 +310,29 @@ class DebrisParticle(utils.Particle):
         return self.radius, self.color
 
 
+class NebulaParticle(utils.Particle):
+    def __init__(self):
+        self.pos = pg.Vector2()
+        self.radius = random.randint(1, 3)
+        self.vel = utils.random_vector(self.radius * 500, 500)
+        self.color = Color.BLACK
+
+    def update(self, dt: float, *args, **kwargs) -> bool:
+        # Despawn when outside of arena.
+        if self.pos.length_squared() > kwargs["arena_radius"] ** 2:
+            return False
+        # Transparent at arena center, full white at arena edge.
+        self.color = tuple(pg.Color(Color.BLACK).lerp(Color.WHITE, self.pos.length() / kwargs["arena_radius"]))
+        self.pos += self.vel * dt
+        return True
+
+    def draw_pos(self, image: pg.Surface) -> Sequence[float]:
+        return self.pos - (self.radius, self.radius)
+
+    def cache_lookup(self) -> Hashable:
+        return self.radius, self.color
+
+
 class GameObject:
     def __init__(self, pos: Sequence[float], shape: ObjectShape, type_: ObjectType, vel: Sequence[float] = (0, 0)):
         self.pos = pg.Vector2(pos)  # noqa
@@ -323,12 +346,15 @@ class GameObject:
         self.health = HEALTH[shape]
         self.last_hit = 0
 
+    def on_screen(self, screen, camera):
+        return screen.get_rect().inflate(20, 20).collidepoint(self.pos + camera)
+
     def update(self, dt: float, arena_radius: int, objects, sounds, **kwargs) -> bool:
         if self.health <= 0 and self.type is not ObjectType.PLAYER:
             for _ in range(40):
                 vel_vector = utils.polar_vector(-random.randint(60, 120), random.randrange(360))
                 kwargs["d"].add(DebrisParticle(self.pos, vel_vector, self.color))
-            if kwargs["s"].get_rect().collidepoint(self.pos + kwargs["c"]):
+            if self.on_screen(kwargs["s"], kwargs["c"]):
                 sounds.play(ASTEROID_BREAK_SOUND)
             return False
         self.pos += self.vel * dt
@@ -444,7 +470,9 @@ class Chaser(GameObject):
 
 class Runner(GameObject):
     def __init__(self, pos: Sequence[float], shape: ObjectShape, target: GameObject):
-        super().__init__(pos, shape, ObjectType.RUNNER)
+        vel = (target.pos - pos).rotate(random.choice((90, -90)))  # noqa
+        vel.scale_to_length(random.randrange(int(vel.length())))
+        super().__init__(pos, shape, ObjectType.RUNNER, vel)
         self.acc = pg.Vector2()
         self.target = target
 
@@ -452,6 +480,10 @@ class Runner(GameObject):
         self.angle = pg.Vector2().angle_to(self.target.pos - self.pos) + 90
         if self.pos.distance_squared_to(self.target.pos) < RUNNER_RUN_DISTANCE ** 2:
             self.acc = self.pos - self.target.pos
+            self.acc.scale_to_length(THRUST[self.shape])
+            self.vel += self.acc * dt
+        else:
+            self.acc = self.target.pos - self.pos
             self.acc.scale_to_length(THRUST[self.shape])
             self.vel += self.acc * dt
         return super().update(dt, arena_radius, objects, sounds, **kwargs)

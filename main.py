@@ -23,10 +23,11 @@ LEFT_MOUSE_BUTTON = 1
 MIDDLE_MOUSE_BUTTON = 2
 RIGHT_MOUSE_BUTTON = 3
 WINDOWED_RESOLUTION = pg.Vector2(800, 600)
+CURSOR_RADIUS = 7
 FPS_CAP = 0
 
 ARENA_RADIUS = 1000
-MIN_ARENA_EDGE_THICKNESS = 5
+MIN_ARENA_EDGE_THICKNESS = 3
 ARENA_EDGE_THICKNESS = 10
 SCORE_MULTIPLIER = 1
 ARENA_PULSE_MULTIPLIER = 1
@@ -44,6 +45,9 @@ def main() -> None:
     screen = utils.create_display(WINDOWED_RESOLUTION, fullscreen)
     clock = pg.time.Clock()
     font = pg.Font(FONT_PATH, 24)
+    cursor = pg.cursors.Cursor((CURSOR_RADIUS, CURSOR_RADIUS),
+                               utils.make_circle_image(CURSOR_RADIUS, Color.WHITE, Color.BLACK, 3))
+    pg.mouse.set_cursor(cursor)
 
     debug = False
     effects = True
@@ -56,11 +60,11 @@ def main() -> None:
     pulse = 0
 
     # Create the pause menu buttons.
-    resume_button = sprites.Button(-200)
-    sounds_button = sprites.Button(-100)
+    resume_button = sprites.Button(-150)
+    sounds_button = sprites.Button(-75)
     color_button = sprites.Button(0)
-    fullscreen_button = sprites.Button(100)
-    quit_button = sprites.Button(200)
+    fullscreen_button = sprites.Button(75)
+    quit_button = sprites.Button(150)
 
     # The center of the arena is the light source, so you can always locate it.
     light_source = (0, 0)
@@ -88,13 +92,15 @@ def main() -> None:
 
     def make_bullet_image(c: tuple[int, int, int]) -> pg.Surface:
         return utils.make_circle_image(sprites.PLAYER_BULLET_RADIUS, c, Color.BLACK)
-
     bullets = utils.ParticleGroup(utils.ImageCache(make_bullet_image))  # noqa
 
     def make_debris_image(item: tuple[int, tuple[int, int, int]]) -> pg.Surface:
         return utils.make_circle_image(item[0], item[1], Color.BLACK)
-
     debris_particles = utils.ParticleGroup(utils.ImageCache(make_debris_image))  # noqa
+
+    def make_nebula_image(item: tuple[int, tuple[int, int, int]]) -> pg.Surface:
+        return utils.make_circle_image(item[0], item[1], Color.BLACK)
+    nebula_particles = utils.ParticleGroup(utils.ImageCache(make_nebula_image), pg.BLEND_ADD)  # noqa
 
     while True:
         for event in pg.event.get():
@@ -141,7 +147,7 @@ def main() -> None:
                     world_coords = event.pos - camera + (random.randrange(20), random.randrange(20))  # noqa
                     shape = random.choice(sprites.RANDOM_SHAPES)
                     t = random.choice(sprites.RANDOM_TYPES)
-                    d = random.random() + 0.4
+                    d = random.random() + 0
                     if t is ObjectType.ASTEROID:
                         game_objects.append(o := sprites.Asteroid(world_coords, shape))
                         if d > 0.5:
@@ -185,6 +191,9 @@ def main() -> None:
             pulse = pg.math.remap(-1, 1, 0, 1, math.sin(arena_pulse))
 
             # Spawn particles.
+            if effects:
+                nebula_particles.add(sprites.NebulaParticle())
+
             if player.thrusting:
                 vel_vector = utils.polar_vector(random.randint(150, 200), player.angle + 90 + random.randint(-15, 15))
                 thrust_particles.add(sprites.ThrustParticle(player.thrust_pos, player.vel + vel_vector))
@@ -200,6 +209,8 @@ def main() -> None:
                                                                    d=debris_particles, p=player, s=screen, c=camera)]
 
             # Update particles and score.
+            if effects:
+                nebula_particles.update(dt, arena_radius=ARENA_RADIUS)
             thrust_particles.update(dt)
             debris_particles.update(dt)
             scores = []
@@ -243,6 +254,8 @@ def main() -> None:
             color1 = Color.ARENA_COLORS[int_color % len(Color.ARENA_COLORS)]
             color2 = Color.ARENA_COLORS[(int_color + 1) % len(Color.ARENA_COLORS)]
             screen.fill(pg.Color(color1).lerp(color2, arena_color - int_color))
+            # Draw the nebula particles.
+            nebula_particles.draw(screen, camera)
         else:
             screen.fill(Color.ARENA_COLOR)
 
@@ -255,16 +268,38 @@ def main() -> None:
             pg.draw.circle(screen, Color.ARENA_EDGE, camera, ARENA_RADIUS, ARENA_EDGE_THICKNESS)
 
         # Draw the game objects.
-        for game_object in game_objects:
-            game_object.draw(screen, light_source, camera)
+        enemies_left = 0
+        enemies_not_on_screen = []
+        for go in game_objects:
+            # Count remaining enemies for detecting wave win.
+            if go.type in sprites.ENEMY_FACTION:
+                enemies_left += 1
+                # Detect offscreen enemies.
+                if not go.on_screen(screen, camera):
+                    enemies_not_on_screen.append(go)
+            # Draw the game object.
+            go.draw(screen, light_source, camera)
             # Draw the collision circles.
             if debug:
-                pg.draw.circle(screen, Color.CYAN, game_object.pos + camera, game_object.radius, 1)
+                pg.draw.circle(screen, Color.CYAN, go.pos + camera, go.radius, 1)
 
         # Draw the particles.
-        thrust_particles.draw(screen, camera)
         debris_particles.draw(screen, camera)
+        thrust_particles.draw(screen, camera)
         bullets.draw(screen, camera)
+
+        # Draw enemy indicators if none are onscreen.
+        if len(enemies_not_on_screen) == enemies_left:
+            for go in enemies_not_on_screen:
+                # Little triangle indicator.
+                draw_vec = go.pos - player.pos
+                draw_vec.scale_to_length(50)
+                v1 = draw_vec.rotate(210)
+                v1.scale_to_length(15)
+                v2 = draw_vec.rotate(-210)
+                v2.scale_to_length(15)
+                draw_vec += screen_middle
+                pg.draw.polygon(screen, go.color, (v1 + draw_vec, draw_vec, v2 + draw_vec))
 
         # Draw player damage flash.
         hp_color = Color.GREEN
@@ -280,8 +315,7 @@ def main() -> None:
 
         wave_surf = font.render(f"WAVE {wave}", True, Color.WHITE)
         screen.blit(wave_surf, wave_surf.get_rect(centerx=screen.get_rect().centerx))
-        enemies_left = [go for go in game_objects if go.type in sprites.ENEMY_FACTION]
-        wave_surf = font.render(f"{len(enemies_left)} POLYBOIDS REMAIN", True, Color.WHITE)
+        wave_surf = font.render(f"{enemies_left} POLYBOIDS REMAIN", True, Color.WHITE)
         screen.blit(wave_surf, wave_surf.get_rect(right=screen.width))
 
         hp_surf = font.render("SHIP", True, Color.WHITE)

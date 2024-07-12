@@ -13,7 +13,7 @@ class Color:
     ORANGE = (255, 128, 0)
 
     THRUST = (40, 20, 0)
-    ARENA_EDGE = (32, 32, 32)
+    ARENA_EDGE = (64, 64, 64)
     BRIGHT_ARENA_EDGE = (100, 100, 100)
     DAMAGE_FLASH = (40, 0, 0)
     ARENA_COLOR = (30, 0, 15)
