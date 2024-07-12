@@ -148,26 +148,20 @@ def main() -> None:
                     shape = random.choice(sprites.RANDOM_SHAPES)
                     t = random.choice(sprites.RANDOM_TYPES)
                     d = random.random() + 0
+                    o = None
                     if t is ObjectType.ASTEROID:
                         game_objects.append(o := sprites.Asteroid(world_coords, shape))
-                        if d > 0.5:
-                            for _ in range(random.randint(0, 5)):
-                                game_objects.append(sprites.EnemyDrone(o))
                     if t is ObjectType.ORBITER:
                         game_objects.append(o := sprites.Orbiter(world_coords, shape))
-                        if d > 0.5:
-                            for _ in range(random.randint(0, 5)):
-                                game_objects.append(sprites.EnemyDrone(o))
                     if t is ObjectType.RUNNER:
                         game_objects.append(o := sprites.Runner(world_coords, shape, player))
-                        if d > 0.5:
-                            for _ in range(random.randint(0, 5)):
-                                game_objects.append(sprites.EnemyDrone(o))
                     if t is ObjectType.CHASER:
                         game_objects.append(o := sprites.Chaser(world_coords, shape, player))
-                        if d > 0.5:
-                            for _ in range(random.randint(2, 6)):
-                                game_objects.append(sprites.EnemyDrone(o))
+                    if t is ObjectType.GUNNER:
+                        game_objects.append(o := sprites.Gunner(world_coords, shape, player))
+                    if o is not None and d > 0.5:
+                        for _ in range(random.randint(2, 6)):
+                            game_objects.append(sprites.EnemyDrone(o))
 
             if event.type == pg.MOUSEBUTTONUP:
                 if event.button == LEFT_MOUSE_BUTTON:
@@ -193,26 +187,22 @@ def main() -> None:
             # Spawn particles.
             if effects:
                 nebula_particles.add(sprites.NebulaParticle())
-
             if player.thrusting:
-                vel_vector = utils.polar_vector(random.randint(150, 200), player.angle + 90 + random.randint(-15, 15))
+                vel_vector = utils.polar_vector(random.randint(150, 200),
+                                                player.angle + 90 + random.randint(-15, 15))
                 thrust_particles.add(sprites.ThrustParticle(player.thrust_pos, player.vel + vel_vector))
-
-                if pg.time.get_ticks() - player.last_fire >= sprites.PLAYER_FIRE_RATE:
-                    sounds.play(FIRE_GUN_SOUND)
-                    player.last_fire = pg.time.get_ticks()
-                    vel_vector = utils.polar_vector(-sprites.PLAYER_BULLET_SPEED, player.angle + 90)
-                    bullets.add(sprites.Bullet(player.gun_pos, player.vel + vel_vector, player))
 
             # Update game objects.
             game_objects = [go for go in game_objects if go.update(dt, ARENA_RADIUS, game_objects, sounds,
-                                                                   d=debris_particles, p=player, s=screen, c=camera)]
+                                                                   d=debris_particles, p=player, s=screen, c=camera,
+                                                                   b=bullets)]
 
-            # Update particles and score.
+            # Update particles.
             if effects:
                 nebula_particles.update(dt, arena_radius=ARENA_RADIUS)
             thrust_particles.update(dt)
             debris_particles.update(dt)
+            # Update bullets and add scoring.
             scores = []
             bullets.update(dt, arena_radius=ARENA_RADIUS, game_objects=game_objects, sounds=sounds, scores=scores)
             score += sum(scores)
@@ -289,17 +279,23 @@ def main() -> None:
         bullets.draw(screen, camera)
 
         # Draw enemy indicators if none are onscreen.
+        # Indicators are triangles that point towards the enemy.
         if len(enemies_not_on_screen) == enemies_left:
             for go in enemies_not_on_screen:
-                # Little triangle indicator.
+                # The triangle point is at length 50 from the player.
                 draw_vec = go.pos - player.pos
                 draw_vec.scale_to_length(50)
+                # The triangle is filled if the enemy is approaching, hollow otherwise.
+                width = 2 if (draw_vec * (go.vel - player.vel)) > 0 else 0
+                # Create the two other points to make an equilateral triangle.
                 v1 = draw_vec.rotate(210)
                 v1.scale_to_length(15)
                 v2 = draw_vec.rotate(-210)
                 v2.scale_to_length(15)
+                # Center the triangle point in the screen.
                 draw_vec += screen_middle
-                pg.draw.polygon(screen, go.color, (v1 + draw_vec, draw_vec, v2 + draw_vec))
+                # Draw the enemy indicator.
+                pg.draw.polygon(screen, go.color, (v1 + draw_vec, draw_vec, v2 + draw_vec), width)
 
         # Draw player damage flash.
         hp_color = Color.GREEN
@@ -336,7 +332,7 @@ def main() -> None:
             screen.blit(help_surf, help_surf.get_rect(centerx=screen.get_rect().centerx, bottom=screen.height))
 
         if debug:
-            fps_surf = font.render(f"{clock.get_fps():.2f}", True, Color.WHITE, Color.BLACK)
+            fps_surf = font.render(f"F3 TO HIDE\n{clock.get_fps():.2f}", True, Color.WHITE, Color.BLACK)
             screen.blit(fps_surf, (0, screen.height - fps_surf.height))
 
         pg.display.flip()

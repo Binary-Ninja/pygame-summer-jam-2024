@@ -71,15 +71,21 @@ HP_POLYGON = (
 
 PLAYER_THRUSTER_POS = (0, 10)
 PLAYER_GUN_POS = (0, -20)
+
 PLAYER_BULLET_RADIUS = 5
 PLAYER_BULLET_SPEED = 500
 PLAYER_FIRE_RATE = 500
+PLAYER_BULLET_DAMAGE = 1
+
+ENEMY_BULLET_RADIUS = 5
+ENEMY_BULLET_SPEED = 500
+ENEMY_FIRE_RATE = 1000
+ENEMY_BULLET_DAMAGE = 1
 
 RUNNER_RUN_DISTANCE = 400
+GUNNER_GUN_DISTANCE = 300
 
 ARENA_BOUNCE = 0.8
-
-BULLET_DAMAGE = 1
 
 BOUNCE_DAMAGE = 1
 BOUNCE_I_FRAMES = 200
@@ -87,6 +93,7 @@ DAMAGE_FLASH_MS = 200
 
 ASTEROID_HIT_SOUND = "explosion.wav"
 ASTEROID_BREAK_SOUND = "asteroid_break.wav"
+FIRE_GUN_SOUND = "fire_gun.wav"
 
 
 class ObjectShape(enum.Enum):
@@ -117,25 +124,28 @@ class ObjectType(enum.Enum):
     ORBITER = enum.auto()
     RUNNER = enum.auto()
     CHASER = enum.auto()
+    GUNNER = enum.auto()
     PLAYER = enum.auto()
 
 
 PLAYER_FACTION = (ObjectType.PLAYER, ObjectType.PLAYER_DRONE)
-ENEMY_FACTION = (ObjectType.ENEMY_DRONE, ObjectType.ASTEROID, ObjectType.ORBITER, ObjectType.RUNNER, ObjectType.CHASER)
+ENEMY_FACTION = (ObjectType.ENEMY_DRONE, ObjectType.ASTEROID, ObjectType.ORBITER, ObjectType.RUNNER, ObjectType.CHASER,
+                 ObjectType.GUNNER)
 
 
 TYPE_SCORES = {
-    ObjectType.ASTEROID: 1,
-    ObjectType.ORBITER: 3,
-    ObjectType.RUNNER: 2,
-    ObjectType.CHASER: 4,
-    ObjectType.ENEMY_DRONE: 1,
     ObjectType.PLAYER: 0,
     ObjectType.PLAYER_DRONE: 0,
+    ObjectType.ENEMY_DRONE: 1,
+    ObjectType.ASTEROID: 1,
+    ObjectType.ORBITER: 2,
+    ObjectType.RUNNER: 3,
+    ObjectType.CHASER: 4,
+    ObjectType.GUNNER: 5,
 }
 
 
-RANDOM_TYPES = (ObjectType.ASTEROID, ObjectType.ORBITER, ObjectType.RUNNER, ObjectType.CHASER)
+RANDOM_TYPES = (ObjectType.ASTEROID, ObjectType.ORBITER, ObjectType.RUNNER, ObjectType.CHASER, ObjectType.GUNNER)
 
 
 POLYGONS = {
@@ -175,13 +185,14 @@ THRUST = {
 }
 
 COLORS = {
-    ObjectType.ASTEROID: Color.WHITE,
-    ObjectType.ORBITER: Color.YELLOW,
-    ObjectType.RUNNER: Color.ORANGE,
-    ObjectType.CHASER: Color.RED,
-    ObjectType.ENEMY_DRONE: Color.MAGENTA,
     ObjectType.PLAYER: Color.GREEN,
     ObjectType.PLAYER_DRONE: Color.CYAN,
+    ObjectType.ENEMY_DRONE: Color.MAGENTA,
+    ObjectType.ASTEROID: Color.WHITE,
+    ObjectType.ORBITER: Color.YELLOW,
+    ObjectType.RUNNER: Color.BLUE,
+    ObjectType.GUNNER: Color.ORANGE,
+    ObjectType.CHASER: Color.RED,
 }
 
 
@@ -256,8 +267,9 @@ class Bullet(utils.Particle):
     def __init__(self, pos: Sequence[float], vel: Sequence[float], owner: "GameObject"):
         self.pos = pg.Vector2(pos)  # noqa
         self.vel = pg.Vector2(vel)  # noqa
+        self.radius = PLAYER_BULLET_RADIUS if owner.type in PLAYER_FACTION else ENEMY_BULLET_RADIUS
+        self.damage = PLAYER_BULLET_DAMAGE if owner.type in PLAYER_FACTION else ENEMY_BULLET_DAMAGE
         self.owner = owner
-        self.damage = BULLET_DAMAGE
 
     def update(self, dt: float, *args, **kwargs) -> bool:
         # Despawn outside of arena bounds.
@@ -270,9 +282,9 @@ class Bullet(utils.Particle):
             if self.owner.type in ENEMY_FACTION and game_object.type in ENEMY_FACTION:
                 continue
             # Collide and deal damage.
-            if self.pos.distance_squared_to(game_object.pos) < game_object.radius ** 2:
+            if self.pos.distance_squared_to(game_object.pos) < (game_object.radius + self.radius) ** 2:
                 game_object.health -= self.damage
-                if game_object.health > 0:
+                if game_object.health > 0 and not game_object.type is ObjectType.PLAYER_DRONE:
                     kwargs["sounds"].play(ASTEROID_HIT_SOUND)
                 if game_object.health <= 0 and self.owner.type in PLAYER_FACTION:
                     kwargs["scores"].append(SHAPE_SCORES[game_object.shape] * TYPE_SCORES[game_object.type])
@@ -282,10 +294,10 @@ class Bullet(utils.Particle):
         return True
 
     def draw_pos(self, image: pg.Surface) -> Sequence[float]:
-        return self.pos - (PLAYER_BULLET_RADIUS, PLAYER_BULLET_RADIUS)
+        return self.pos - (self.radius, self.radius)
 
     def cache_lookup(self) -> Hashable:
-        return Color.GREEN
+        return self.owner.color
 
 
 class DebrisParticle(utils.Particle):
@@ -489,6 +501,33 @@ class Runner(GameObject):
         return super().update(dt, arena_radius, objects, sounds, **kwargs)
 
 
+class Gunner(GameObject):
+    def __init__(self, pos: Sequence[float], shape: ObjectShape, target: GameObject):
+        super().__init__(pos, shape, ObjectType.GUNNER)
+        self.acc = pg.Vector2()
+        self.target = target
+        self.last_fire = 0
+
+    def update(self, dt: float, arena_radius: int, objects, sounds, **kwargs) -> bool:
+        self.angle = pg.Vector2().angle_to(self.target.pos - self.pos) + 90
+        if self.pos.distance_squared_to(self.target.pos) < GUNNER_GUN_DISTANCE ** 2:
+            self.acc = self.pos - self.target.pos
+            self.acc.scale_to_length(THRUST[self.shape])
+            self.vel += self.acc * dt
+            if pg.time.get_ticks() - self.last_fire >= ENEMY_FIRE_RATE:
+                sounds.play(FIRE_GUN_SOUND)
+                self.last_fire = pg.time.get_ticks()
+                vel_vector = utils.polar_vector(-ENEMY_BULLET_SPEED, self.angle + 90)
+                gun_pos = self.target.pos - self.pos
+                gun_pos.scale_to_length(self.radius)
+                kwargs["b"].add(Bullet(self.pos + gun_pos, self.vel + vel_vector, self))
+        else:
+            self.acc = (0, 0) - self.pos
+            self.acc.scale_to_length(THRUST[self.shape])
+            self.vel += self.acc * dt
+        return super().update(dt, arena_radius, objects, sounds, **kwargs)
+
+
 class PlayerDrone(GameObject):
     def __init__(self, player: GameObject):
         pos = player.pos + utils.random_vector(100, 50)
@@ -553,6 +592,11 @@ class Player(GameObject):
         self.gun_pos = self.pos + pg.Vector2(PLAYER_GUN_POS).rotate(self.angle)
         if self.thrusting:
             self.acc.from_polar((-THRUST[self.shape], self.angle + 90))
+            if pg.time.get_ticks() - self.last_fire >= PLAYER_FIRE_RATE:
+                sounds.play(FIRE_GUN_SOUND)
+                self.last_fire = pg.time.get_ticks()
+                vel_vector = utils.polar_vector(-PLAYER_BULLET_SPEED, self.angle + 90)
+                kwargs["b"].add(Bullet(self.gun_pos, self.vel + vel_vector, self))
         else:
             self.acc = pg.Vector2()
         self.vel += self.acc * dt
