@@ -1,5 +1,5 @@
 # This file holds useful utility functions and classes.
-
+import random
 from pathlib import Path
 import sys
 
@@ -26,6 +26,11 @@ def polar_vector(length: float, angle: float) -> pg.Vector2:
     vec = pg.Vector2()
     vec.from_polar((length, angle))
     return vec
+
+
+def random_vector(max_len: int, min_len: int = 0) -> pg.Vector2:
+    """Return a Vector2 pointing in a random direction with a length of ``min_len`` to ``max_len``."""
+    return polar_vector(random.randint(min_len, max_len), random.randrange(360))
 
 
 def load_image(filename: str | Path, convert: bool = True, alpha: bool = False) -> pg.Surface:
