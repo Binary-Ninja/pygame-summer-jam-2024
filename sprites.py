@@ -82,17 +82,18 @@ ENEMY_BULLET_SPEED = 500
 ENEMY_FIRE_RATE = 1000
 ENEMY_BULLET_DAMAGE = 1
 
-RUNNER_RUN_DISTANCE = 500
+RUNNER_RUN_DISTANCE = 400
 GUNNER_GUN_DISTANCE = 300
+POWERUP_SUCK_DISTANCE = 200
 
-ARENA_BOUNCE = 0.8
+ARENA_BOUNCE = 0.6
 
 MAX_SHIELD = 10
 SHIELD_BONUS = 2
 
 BOUNCE_DAMAGE = 1
-BOUNCE_I_FRAMES = 200
-DAMAGE_FLASH_MS = 200
+BOUNCE_I_FRAMES = 250
+DAMAGE_FLASH_MS = 250
 
 ASTEROID_HIT_SOUND = "explosion.wav"
 PLAYER_HIT_SOUND = "player_hit.wav"
@@ -101,6 +102,7 @@ FIRE_GUN_SOUND = "fire_gun.wav"
 SHIELD_HIT_SOUND = "shield_hit.wav"
 ENEMY_FIRE_GUN_SOUND = "enemy_gun.wav"
 PLAYER_DEATH_SOUND = "player_death.wav"
+POWERUP_SOUND = "power_up.wav"
 
 
 class ObjectShape(enum.Enum):
@@ -110,6 +112,7 @@ class ObjectShape(enum.Enum):
     HEXAGON = enum.auto()
     OCTAGON = enum.auto()
     PLAYER = enum.auto()
+    POWER_UP = enum.auto()
 
 
 SHAPE_SCORES = {
@@ -119,12 +122,15 @@ SHAPE_SCORES = {
     ObjectShape.HEXAGON: 6,
     ObjectShape.OCTAGON: 8,
     ObjectShape.PLAYER: 0,
+    ObjectShape.POWER_UP: 0,
 }
 
-RANDOM_SHAPES = (ObjectShape.TRIANGLE, ObjectShape.SQUARE, ObjectShape.HEXAGON, ObjectShape.OCTAGON)
+RANDOM_SHAPES = (ObjectShape.TRIANGLE, ObjectShape.SQUARE, ObjectShape.HEXAGON, ObjectShape.OCTAGON,
+                 ObjectShape.SQUARE, ObjectShape.HEXAGON)
 
 
 class ObjectType(enum.Enum):
+    POWER_UP = enum.auto()
     PLAYER_DRONE = enum.auto()
     ENEMY_DRONE = enum.auto()
     ASTEROID = enum.auto()
@@ -135,12 +141,22 @@ class ObjectType(enum.Enum):
     PLAYER = enum.auto()
 
 
+class PowerUpType(enum.Enum):
+    HEALTH = enum.auto()
+    SHIELD = enum.auto()
+    DRONE = enum.auto()
+
+
+RANDOM_POWERUPS = (PowerUpType.HEALTH, PowerUpType.SHIELD, PowerUpType.DRONE)
+
+
 PLAYER_FACTION = (ObjectType.PLAYER, ObjectType.PLAYER_DRONE)
 ENEMY_FACTION = (ObjectType.ENEMY_DRONE, ObjectType.ASTEROID, ObjectType.ORBITER, ObjectType.RUNNER, ObjectType.CHASER,
                  ObjectType.GUNNER)
 
 
 TYPE_SCORES = {
+    ObjectType.POWER_UP: 0,
     ObjectType.PLAYER: 0,
     ObjectType.PLAYER_DRONE: 0,
     ObjectType.ENEMY_DRONE: 1,
@@ -162,6 +178,7 @@ POLYGONS = {
     ObjectShape.HEXAGON: HEXAGON_TRIANGLES,
     ObjectShape.OCTAGON: OCTAGON_TRIANGLES,
     ObjectShape.PLAYER: PLAYER_POLYGONS,
+    ObjectShape.POWER_UP: PLAYER_POLYGONS,
 }
 
 RADII = {
@@ -171,6 +188,7 @@ RADII = {
     ObjectShape.HEXAGON: 35,
     ObjectShape.OCTAGON: 55,
     ObjectShape.PLAYER: 10,
+    ObjectShape.POWER_UP: 12,
 }
 
 HEALTH = {
@@ -180,15 +198,17 @@ HEALTH = {
     ObjectShape.HEXAGON: 6,
     ObjectShape.OCTAGON: 8,
     ObjectShape.PLAYER: 10,
+    ObjectShape.POWER_UP: 1,
 }
 
 THRUST = {
     ObjectShape.DRONE: 250,
-    ObjectShape.TRIANGLE: 200,
+    ObjectShape.TRIANGLE: 150,
     ObjectShape.SQUARE: 150,
     ObjectShape.HEXAGON: 100,
     ObjectShape.OCTAGON: 50,
     ObjectShape.PLAYER: 500,
+    ObjectShape.POWER_UP: 200,
 }
 
 COLORS = {
@@ -200,6 +220,7 @@ COLORS = {
     ObjectType.RUNNER: Color.BLUE,
     ObjectType.GUNNER: Color.ORANGE,
     ObjectType.CHASER: Color.RED,
+    ObjectType.POWER_UP: Color.BLACK,
 }
 
 
@@ -290,6 +311,10 @@ class Bullet(utils.Particle):
                 continue
             # Collide and deal damage.
             if self.pos.distance_squared_to(go.pos) < (go.radius + self.radius) ** 2:
+                if go.type is ObjectType.POWER_UP:
+                    go.health = 0
+                    self.owner.apply_powerup(go.p_type, kwargs["sounds"], kwargs["game_objects"])
+                    return False
                 go.health -= self.damage
                 go.shield_bypass = True
                 if go.health > 0 and go.type is not ObjectType.PLAYER_DRONE:
@@ -369,25 +394,46 @@ class GameObject:
         self.shield_bypass = False
         self.shield = 0
 
+    def apply_powerup(self, type_: PowerUpType, sounds, objects):
+        # Could possibly add certain powerup abilities to enemies, but very unlikely.
+        pass
+
     def on_screen(self, screen, camera):
         return screen.get_rect().inflate(20, 20).collidepoint(self.pos + camera)
 
     def update(self, dt: float, arena_radius: int, objects, sounds, **kwargs) -> bool:
         if self.health <= 0 and self.type is not ObjectType.PLAYER:
-            for _ in range(40):
-                vel_vector = utils.polar_vector(-random.randint(60, 120), random.randrange(360))
-                kwargs["d"].add(DebrisParticle(self.pos, vel_vector, self.color))
-            if self.on_screen(kwargs["s"], kwargs["c"]) or self.shield_bypass:
-                sounds.play(ASTEROID_BREAK_SOUND)
+            if self.type is not ObjectType.POWER_UP:
+                for _ in range(40):
+                    vel_vector = utils.polar_vector(-random.randint(60, 120), random.randrange(360))
+                    kwargs["d"].add(DebrisParticle(self.pos, vel_vector, self.color))
+                if self.on_screen(kwargs["s"], kwargs["c"]) or self.shield_bypass:
+                    sounds.play(ASTEROID_BREAK_SOUND)
+                # Spawn powerups if not a drone.
+                if self.type in ENEMY_FACTION and self.type is not ObjectType.ENEMY_DRONE:
+                    if random.random() > 0.5:
+                        objects.append(PowerUp(self.pos, self.vel, random.choice(RANDOM_POWERUPS)))
             return False
         self.pos += self.vel * dt
         if self.pos.length_squared() > arena_radius ** 2:
-            self.pos.scale_to_length(arena_radius)
-            self.vel = self.vel.reflect(self.pos) * ARENA_BOUNCE
+            if kwargs["e"]:
+                self.pos.scale_to_length(-arena_radius)
+            else:
+                self.pos.scale_to_length(arena_radius)
+                self.vel = self.vel.reflect(self.pos) * ARENA_BOUNCE
         for go in objects:
             if go is self:
                 continue
             if self.pos.distance_squared_to(go.pos) < (self.radius + go.radius) ** 2:
+                # Don't collide with powerups.
+                if go.type is ObjectType.POWER_UP:
+                    continue
+                # Apply powerups.
+                if self.type is ObjectType.POWER_UP:
+                    if go.type in PLAYER_FACTION:
+                        kwargs["p"].apply_powerup(self.p_type, sounds, objects)  # noqa
+                        return False
+                    continue
                 # Player and player drones don't collide.
                 if self.type in PLAYER_FACTION and go.type in PLAYER_FACTION:
                     continue
@@ -480,6 +526,31 @@ class Asteroid(GameObject):
         return super().update(dt, arena_radius, objects, sounds, **kwargs)
 
 
+class PowerUp(GameObject):
+    def __init__(self, pos: Sequence[float], vel: Sequence[float], type_: PowerUpType):
+        super().__init__(pos, ObjectShape.POWER_UP, ObjectType.POWER_UP, vel)
+        self.p_type = type_
+        self.acc = pg.Vector2()
+
+    def update(self, dt: float, arena_radius: int, objects, sounds, **kwargs) -> bool:
+        player_pos = kwargs["p"].pos
+        if self.pos.distance_squared_to(player_pos) < POWERUP_SUCK_DISTANCE ** 2:
+            self.acc = player_pos - self.pos  # noqa
+            self.acc.scale_to_length(THRUST[self.shape])
+            self.vel += self.acc * dt
+        return super().update(dt, arena_radius, objects, sounds, **kwargs)
+
+    def draw(self, screen: pg.Surface, light_source: Sequence[float], camera: Sequence[float]):
+        color = Color.WHITE
+        if self.p_type is PowerUpType.HEALTH:
+            color = Color.GREEN
+        if self.p_type is PowerUpType.SHIELD:
+            color = Color.BLUE
+        if self.p_type is PowerUpType.DRONE:
+            color = Color.CYAN
+        pg.draw.circle(screen, color, self.pos + camera, self.radius, 5)  # noqa
+
+
 class Orbiter(GameObject):
     def __init__(self, pos: Sequence[float], shape: ObjectShape):
         self.target = utils.random_vector(500)
@@ -519,7 +590,6 @@ class Runner(GameObject):
         super().__init__(pos, shape, ObjectType.RUNNER, vel)
         self.acc = pg.Vector2()
         self.target = target
-        self.orbit = utils.random_vector(500)
 
     def update(self, dt: float, arena_radius: int, objects, sounds, **kwargs) -> bool:
         self.angle = pg.Vector2().angle_to(self.target.pos - self.pos) + 90
@@ -528,7 +598,7 @@ class Runner(GameObject):
             self.acc.scale_to_length(THRUST[self.shape])
             self.vel += self.acc * dt
         else:
-            self.acc = self.orbit - self.pos
+            self.acc = self.target.pos - self.pos
             self.acc.scale_to_length(THRUST[self.shape])
             self.vel += self.acc * dt
         return super().update(dt, arena_radius, objects, sounds, **kwargs)
@@ -598,6 +668,15 @@ class Player(GameObject):
         self.gun_pos = self.pos + pg.Vector2(PLAYER_GUN_POS).rotate(self.angle)
         self.last_fire = 0
         self.dead = False
+
+    def apply_powerup(self, type_: PowerUpType, sounds, objects):
+        sounds.play(POWERUP_SOUND)
+        if type_ is PowerUpType.HEALTH:
+            self.health += 1
+        if type_ is PowerUpType.SHIELD:
+            self.shield = MAX_SHIELD
+        if type_ is PowerUpType.DRONE:
+            objects.append(Drone(self))
 
     def update(self, dt: float, arena_radius: int, objects, sounds, **kwargs) -> bool:
         if self.dead:

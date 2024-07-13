@@ -22,16 +22,16 @@ FONT_PATH = APPLICATION_DIRECTORY / "Kenney_Future_Narrow.ttf"
 LEFT_MOUSE_BUTTON = 1
 MIDDLE_MOUSE_BUTTON = 2
 RIGHT_MOUSE_BUTTON = 3
+
+GAME_TITLE = "POLYBOIDS"
 WINDOWED_RESOLUTION = pg.Vector2(800, 600)
 CURSOR_RADIUS = 7
 FPS_CAP = 0
 
-GAME_TITLE = "POLYBOIDS"
 MIN_ARENA_EDGE_THICKNESS = 3
 ARENA_EDGE_THICKNESS = 10
 ARENA_PULSE_MULTIPLIER = 1
 ARENA_COLOR_MULTIPLIER = 0.5
-PLAYER_DAMAGE_FLASH_MS = 200
 
 
 class IndicatorStatus(enum.Enum):
@@ -40,13 +40,14 @@ class IndicatorStatus(enum.Enum):
     EMPTY = enum.auto()
 
 
-INDICATOR_LINE = "OFFSCREEN INDICATORS:"
-INDICATORS = (IndicatorStatus.ALWAYS, IndicatorStatus.NEVER, IndicatorStatus.EMPTY)
+INDICATOR_LINE = "OFFSCREEN MARKERS:"
+INDICATORS = (IndicatorStatus.NEVER, IndicatorStatus.EMPTY, IndicatorStatus.ALWAYS)
 INDICATOR_TEXT = {
-    IndicatorStatus.NEVER: "              NEVER SHOW",
-    IndicatorStatus.ALWAYS: "            SHOW ALWAYS",
+    IndicatorStatus.NEVER: "           NEVER SHOW",
+    IndicatorStatus.ALWAYS: "         SHOW ALWAYS",
     IndicatorStatus.EMPTY: "WHEN NO ENEMIES IN VIEW",
 }
+MAX_INDICATOR_SENSE = 2000
 
 
 def main() -> None:
@@ -61,6 +62,7 @@ def main() -> None:
     font = pg.Font(FONT_PATH, 24)
     big_font = pg.Font(FONT_PATH, 48)
     title_text_surf = big_font.render(GAME_TITLE, True, Color.WHITE)
+    wave_clear_surf = big_font.render("WAVE CLEAR", True, Color.WHITE)
     cursor = pg.cursors.Cursor((CURSOR_RADIUS, CURSOR_RADIUS),
                                utils.make_circle_image(CURSOR_RADIUS, Color.WHITE, Color.BLACK, 3))
     pg.mouse.set_cursor(cursor)
@@ -69,6 +71,8 @@ def main() -> None:
     debug = False
     effects = True
     show_indicators = IndicatorStatus.ALWAYS
+    force_show_indicators = False
+    edge_portal = False
     paused = True
     score = 0
     wave = 1
@@ -85,12 +89,13 @@ def main() -> None:
     pulse = 0
 
     # Create the pause menu buttons.
-    resume_button = sprites.Button(-130)
-    sounds_button = sprites.Button(-70)
-    indicator_button = sprites.Button(0, 70)
-    color_button = sprites.Button(70)
-    fullscreen_button = sprites.Button(130)
-    quit_button = sprites.Button(190)
+    resume_button = sprites.Button(-160)
+    sounds_button = sprites.Button(-100)
+    indicator_button = sprites.Button(-30, 70)
+    color_button = sprites.Button(40)
+    edge_button = sprites.Button(100)
+    fullscreen_button = sprites.Button(160)
+    quit_button = sprites.Button(220)
 
     # The center of the arena is the light source, so you can always locate it.
     light_source = (0, 0)
@@ -106,14 +111,17 @@ def main() -> None:
 
     def make_bullet_image(c: tuple[int, int, int]) -> pg.Surface:
         return utils.make_circle_image(sprites.PLAYER_BULLET_RADIUS, c, Color.BLACK)
+
     bullets = utils.ParticleGroup(utils.ImageCache(make_bullet_image))  # noqa
 
     def make_debris_image(item: tuple[int, tuple[int, int, int]]) -> pg.Surface:
         return utils.make_circle_image(item[0], item[1], Color.BLACK)
+
     debris_particles = utils.ParticleGroup(utils.ImageCache(make_debris_image))  # noqa
 
     def make_nebula_image(item: tuple[int, tuple[int, int, int]]) -> pg.Surface:
         return utils.make_circle_image(item[0], item[1], Color.BLACK)
+
     nebula_particles = utils.ParticleGroup(utils.ImageCache(make_nebula_image), pg.BLEND_ADD)  # noqa
 
     while True:
@@ -140,28 +148,25 @@ def main() -> None:
                     fullscreen = not fullscreen
                     screen = utils.create_display(WINDOWED_RESOLUTION, fullscreen)
 
-                if event.key == pg.K_m:
-                    sounds.muted = not sounds.muted
-                    if not sounds.muted and paused:
-                        sounds.play("fire_gun.wav")
-
-                if event.key == pg.K_n:
-                    effects = not effects
-
             if event.type == pg.MOUSEBUTTONDOWN:
                 if event.button == LEFT_MOUSE_BUTTON and not player.dead:
                     player.thrusting = True
 
                 # Spawn enemies in debug mode.
                 if event.button == MIDDLE_MOUSE_BUTTON and not paused and debug:
+                    player.shield = sprites.MAX_SHIELD
                     game_objects.append(o := sprites.Drone(player))
                     o.shield = sprites.MAX_SHIELD
 
+                if event.button == RIGHT_MOUSE_BUTTON:
+                    force_show_indicators = True
+
                 if event.button == RIGHT_MOUSE_BUTTON and not paused and debug:
                     world_coords = event.pos - camera + (random.randrange(20), random.randrange(20))  # noqa
+                    game_objects.append(sprites.PowerUp(world_coords, (0, 0), random.choice(sprites.RANDOM_POWERUPS)))
                     shape = random.choice(sprites.RANDOM_SHAPES)
                     t = random.choice(sprites.RANDOM_TYPES)
-                    # t = ObjectType.GUNNER
+                    t = None
                     d = random.random() + 0
                     o = None
                     if t is ObjectType.ASTEROID:
@@ -174,7 +179,8 @@ def main() -> None:
                         game_objects.append(o := sprites.Chaser(world_coords, shape, player))
                     if t is ObjectType.GUNNER:
                         game_objects.append(o := sprites.Gunner(world_coords, shape, player))
-                    o.shield = sprites.MAX_SHIELD if random.random() > 0.5 else 0
+                    if o:
+                        o.shield = sprites.MAX_SHIELD if random.random() > 0.5 else 0
                     if o is not None and d > 0.5:
                         for _ in range(random.randint(2, 6)):
                             game_objects.append(d := sprites.Drone(o))
@@ -183,6 +189,9 @@ def main() -> None:
             if event.type == pg.MOUSEBUTTONUP:
                 if event.button == LEFT_MOUSE_BUTTON:
                     player.thrusting = False
+
+                if event.button == RIGHT_MOUSE_BUTTON:
+                    force_show_indicators = False
 
         # Tick the clock.
         dt = clock.tick(FPS_CAP) / 1000
@@ -214,10 +223,30 @@ def main() -> None:
             if new_wave:
                 new_wave = False
                 arena_radius = 900 + (wave * 100)
-                for _ in range(wave * 5):
+                for _ in range(2 + wave):
                     pos = utils.random_vector(arena_radius, 500)
                     shape = random.choice(sprites.RANDOM_SHAPES)
-                    t = random.choice(sprites.RANDOM_TYPES)
+                    if wave < 3:
+                        type_sequence = (ObjectType.ASTEROID, ObjectType.ORBITER)
+                    elif wave < 5:
+                        type_sequence = (ObjectType.ASTEROID, ObjectType.ORBITER, ObjectType.RUNNER)
+                    elif wave < 7:
+                        type_sequence = (ObjectType.ASTEROID, ObjectType.ORBITER, ObjectType.RUNNER, ObjectType.CHASER)
+                    elif wave < 9:
+                        type_sequence = (ObjectType.ASTEROID, ObjectType.ORBITER,
+                                         ObjectType.ASTEROID, ObjectType.ORBITER,
+                                         ObjectType.RUNNER, ObjectType.CHASER)
+                    elif wave < 11:
+                        type_sequence = (ObjectType.ASTEROID, ObjectType.ORBITER,
+                                         ObjectType.ASTEROID, ObjectType.ORBITER,
+                                         ObjectType.RUNNER, ObjectType.CHASER,
+                                         ObjectType.GUNNER)
+                    else:
+                        type_sequence = sprites.RANDOM_TYPES
+                    t = random.choice(type_sequence)
+                    s = random.random() * wave > 5
+                    d = random.random() * wave > 7
+                    o = None
                     if t is ObjectType.ASTEROID:
                         game_objects.append(o := sprites.Asteroid(pos, shape))
                     if t is ObjectType.ORBITER:
@@ -228,6 +257,13 @@ def main() -> None:
                         game_objects.append(o := sprites.Chaser(pos, shape, player))
                     if t is ObjectType.GUNNER:
                         game_objects.append(o := sprites.Gunner(pos, shape, player))
+                    if o and s:
+                        o.shield = sprites.MAX_SHIELD
+                    if o and d:
+                        for _ in range(random.randint(1, 5)):
+                            game_objects.append(d := sprites.Drone(o))
+                            if random.random() > 0.8:
+                                d.shield = sprites.MAX_SHIELD
 
             # Increase death timer.
             if player.dead:
@@ -252,7 +288,7 @@ def main() -> None:
             # Update game objects.
             game_objects = [go for go in game_objects if go.update(dt, arena_radius, game_objects, sounds,
                                                                    d=debris_particles, p=player, s=screen, c=camera,
-                                                                   b=bullets)]
+                                                                   b=bullets, e=edge_portal)]
             # Count remaining enemies.
             enemies_left = len([go for go in game_objects if go.type in sprites.ENEMY_FACTION])
 
@@ -283,6 +319,9 @@ def main() -> None:
                             go.vel.scale_to_length(random.randint(50, 200))
                             go.acc = pg.Vector2()
                             go.turn_speed = random.randint(-100, 100)
+                        # Delete all the leftover powerups.
+                        if go.type is ObjectType.POWER_UP:
+                            go.health = 0
 
             # Update particles.
             if effects:
@@ -308,6 +347,8 @@ def main() -> None:
                 show_indicators = INDICATORS[(INDICATORS.index(show_indicators) + 1) % len(INDICATORS)]
             if color_button.update():
                 effects = not effects
+            if edge_button.update():
+                edge_portal = not edge_portal
             if fullscreen_button.update():
                 fullscreen = not fullscreen
                 screen = utils.create_display(WINDOWED_RESOLUTION, fullscreen)
@@ -363,15 +404,27 @@ def main() -> None:
 
         # Draw offscreen enemy indicators.
         # Indicators are triangles that point towards the enemy.
-        if not player.dead and show_indicators is not IndicatorStatus.NEVER:
+        # This essentially creates a minimap for the player to locate the remaining enemies.
+        # It also provides useful info like whether the enemy is approaching and how fast it is going.
+        if not player.dead and ((show_indicators is not IndicatorStatus.NEVER) or force_show_indicators):
             # Show the indicators if they should always be shown or if there are no enemies on screen.
-            if show_indicators is IndicatorStatus.ALWAYS or len(enemies_not_on_screen) == enemies_left:
+            if show_indicators is IndicatorStatus.ALWAYS or \
+                    len(enemies_not_on_screen) == enemies_left or force_show_indicators:
                 for go in enemies_not_on_screen:
-                    # The triangle point is at length 50 from the player.
                     draw_vec = go.pos - player.pos
-                    draw_vec.scale_to_length(50)
                     # The triangle is filled if the enemy is approaching, hollow otherwise.
                     width = 2 if (draw_vec * (go.vel - player.vel)) > 0 else 0
+                    # The triangle is further away if the enemy is further away.
+                    # Using a hard limit instead of scaling by arena radius provides more useful info.
+                    # Enemies outside the max sensor range will have their indicators darkened.
+                    if draw_vec.length_squared() > MAX_INDICATOR_SENSE ** 2:
+                        offset = 200
+                        color = sprites.darken(go.color, 0.5)
+                    else:
+                        offset = pg.math.remap(0, MAX_INDICATOR_SENSE ** 2, 25, 200,
+                                               draw_vec.length_squared())
+                        color = go.color
+                    draw_vec.scale_to_length(offset)
                     # Create the two other points to make an equilateral triangle.
                     v1 = draw_vec.rotate(210)
                     v1.scale_to_length(15)
@@ -380,16 +433,20 @@ def main() -> None:
                     # Center the triangle point in the screen.
                     draw_vec += screen_middle
                     # Draw the enemy indicator.
-                    pg.draw.polygon(screen, go.color, (v1 + draw_vec, draw_vec, v2 + draw_vec), width)
+                    pg.draw.polygon(screen, color, (v1 + draw_vec, draw_vec, v2 + draw_vec), width)
 
         # Draw player damage flash.
         flash_hp = False
-        if (pg.time.get_ticks() - player.last_hit < PLAYER_DAMAGE_FLASH_MS and
+        if (pg.time.get_ticks() - player.last_hit < sprites.DAMAGE_FLASH_MS and
                 (player.shield_bypass or player.shield <= 0)):
             flash_hp = True
             flash_surf = pg.Surface(screen.size)
             flash_surf.fill(Color.DAMAGE_FLASH)
             screen.blit(flash_surf, (0, 0), special_flags=pg.BLEND_ADD)
+
+        # Draw wave clear image.
+        if not paused and wave_timer > 0:
+            screen.blit(wave_clear_surf, wave_clear_surf.get_rect(centerx=screen.get_rect().centerx, y=150))
 
         # Draw new wave image.
         if pg.time.get_ticks() - show_new_wave_image < 2000 and not paused:
@@ -422,16 +479,17 @@ def main() -> None:
 
         # Draw menu buttons.
         if paused:
-            screen.blit(title_text_surf, title_text_surf.get_rect(centerx=screen.get_rect().centerx, y=80))
+            screen.blit(title_text_surf, title_text_surf.get_rect(centerx=screen.get_rect().centerx, y=50))
             resume_button.draw(screen, font, " (SPACE) PLAY" if player.dead else " (SPACE) RESUME")
-            sounds_button.draw(screen, font, f" (M) SOUNDS: {"OFF" if sounds.muted else "ON"}")
+            sounds_button.draw(screen, font, f" SOUNDS: {"OFF" if sounds.muted else "ON"}")
+            edge_button.draw(screen, font, f"ARENA EDGE: {"PORTAL" if edge_portal else "BOUNCE"}")
             indicator_button.draw(screen, font, f"{INDICATOR_LINE}\n{INDICATOR_TEXT[show_indicators]}")
-            color_button.draw(screen, font, f" (N) ARENA EFFECTS: {"ON" if effects else "OFF"}")
+            color_button.draw(screen, font, f" ARENA EFFECTS: {"ON" if effects else "OFF"}")
             fullscreen_button.draw(screen, font, f" (F4) FULLSCREEN: {"ON" if fullscreen else "OFF"}")
             quit_button.draw(screen, font, " (CTRL+Q) QUIT", Color.RED)
-            help_surf = font.render("MOUSE TO MOVE AND FIRE", True, Color.WHITE)
+            help_surf = font.render("MOUSE TO MOVE, LEFT CLICK TO FIRE AND THRUST", True, Color.WHITE)
             screen.blit(help_surf, help_surf.get_rect(centerx=screen.get_rect().centerx, bottom=screen.height - 25))
-            help_surf = font.render("SPACE TO PAUSE AND RESUME", True, Color.WHITE)
+            help_surf = font.render("RIGHT CLICK TO VIEW OFFSCREEN MARKERS", True, Color.WHITE)
             screen.blit(help_surf, help_surf.get_rect(centerx=screen.get_rect().centerx, bottom=screen.height))
 
         if debug:
