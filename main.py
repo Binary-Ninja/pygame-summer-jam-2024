@@ -131,6 +131,9 @@ def main() -> None:
                     if not paused and player.dead:
                         restart_game = True
 
+                if event.key == pg.K_F2:
+                    pg.image.save(screen, f"screenshot_{pg.time.get_ticks()}.png")
+
                 if event.key == pg.K_F3:
                     debug = not debug
 
@@ -144,6 +147,9 @@ def main() -> None:
 
                 if event.button == RIGHT_MOUSE_BUTTON:
                     force_show_indicators = True
+
+                if event.button == MIDDLE_MOUSE_BUTTON and debug:
+                    wave = 100
 
             if event.type == pg.MOUSEBUTTONUP:
                 if event.button == LEFT_MOUSE_BUTTON:
@@ -350,10 +356,11 @@ def main() -> None:
             if go.type in sprites.ENEMY_MARKERS and not go.on_screen(screen, camera):
                 enemies_not_on_screen.append(go)
             # Draw the game object.
-            go.draw(screen, light_source, camera)
-            # Draw the collision circles.
-            if debug:
-                pg.draw.circle(screen, Color.CYAN, go.pos + camera, go.radius, 1)
+            if go.should_draw(screen, camera):
+                go.draw(screen, light_source, camera)
+                # Draw the collision circles.
+                if debug:
+                    pg.draw.circle(screen, Color.CYAN, go.pos + camera, go.radius, 1)
 
         # Draw the particles.
         debris_particles.draw(screen, camera)

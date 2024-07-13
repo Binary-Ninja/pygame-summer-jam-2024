@@ -519,6 +519,9 @@ class GameObject:
     def on_screen(self, screen, camera):
         return screen.get_rect().inflate(20, 20).collidepoint(self.pos + camera)
 
+    def should_draw(self, screen, camera):
+        return screen.get_rect().inflate(100, 100).collidepoint(self.pos + camera)
+
     def update(self, dt: float, arena_radius: int, objects, sounds, **kwargs) -> bool:
         if self.health <= 0 and self.type is not ObjectType.PLAYER:
             if self.type is not ObjectType.POWER_UP:
