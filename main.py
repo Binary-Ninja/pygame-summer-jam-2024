@@ -58,8 +58,12 @@ def main() -> None:
     fullscreen = True
     screen = utils.create_display(WINDOWED_RESOLUTION, fullscreen)
     clock = pg.time.Clock()
-    font = pg.Font(FONT_PATH, 24)
-    big_font = pg.Font(FONT_PATH, 48)
+    try:
+        font = pg.Font(FONT_PATH, 24)
+        big_font = pg.Font(FONT_PATH, 48)
+    except Exception:
+        font = pg.Font(size=24)
+        big_font = pg.Font(size=48)
     title_text_surf = big_font.render(GAME_TITLE, True, Color.WHITE)
     wave_clear_surf = big_font.render("WAVE CLEAR", True, Color.WHITE)
     cursor = pg.cursors.Cursor((CURSOR_RADIUS, CURSOR_RADIUS),
@@ -393,6 +397,9 @@ def main() -> None:
                     # Using a hard limit instead of scaling by arena radius provides more useful info.
                     # Enemies outside the max sensor range will have their indicators darkened.
                     if draw_vec.length_squared() > MAX_INDICATOR_SENSE ** 2:
+                        # Don't show the maxed arrows if screen has enemies and we aren't forcing view.
+                        if not force_show_indicators and not screen_empty:
+                            continue
                         offset = 200
                         color = sprites.darken(go.color, 0.5)
                     else:
@@ -476,4 +483,8 @@ def main() -> None:
 
 
 if __name__ == '__main__':
-    main()
+    try:
+        main()
+    except Exception as ex:
+        print(ex)
+        input("Press Enter to continue...")

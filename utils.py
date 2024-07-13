@@ -12,12 +12,16 @@ class Sounds:
     def __init__(self, sound_folder: Path, muted: bool = False):
         self.muted = muted
         self.sounds: dict[str, pg.mixer.Sound] = {}
-        for path in sound_folder.iterdir():
-            if path.is_file():
-                self.sounds[path.name] = pg.mixer.Sound(path)
+        self.broken = False
+        try:
+            for path in sound_folder.iterdir():
+                if path.is_file():
+                    self.sounds[path.name] = pg.mixer.Sound(path)
+        except Exception:
+            self.broken = True
 
     def play(self, sound: str):
-        if not self.muted:
+        if not self.muted and not self.broken:
             self.sounds[sound].play()
 
 
@@ -67,7 +71,10 @@ def setup_window(title: str, icon_path: Optional[str | Path] = None, big_icon_pa
         icon_image = load_image(big_icon_path, False)
         pg.display.set_icon(icon_image)
     elif icon_path:
-        icon_image = load_image(icon_path, False)
+        try:
+            icon_image = load_image(icon_path, False)
+        except OSError:
+            icon_image = pg.Surface((32, 32))
         pg.display.set_icon(icon_image)
 
 

@@ -895,7 +895,7 @@ class Player(GameObject):
                     go.color = COLORS[self.type]
                     d_count += 1
         if type_ is PowerUpType.LASER:
-            self.laser = 2.0
+            self.laser = 3.0
         # Don't play sounds if it is a drone powerup and you have no drones.
         if d_count:
             sounds.play(POWERUP_SOUND)
