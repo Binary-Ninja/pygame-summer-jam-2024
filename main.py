@@ -63,13 +63,13 @@ def main() -> None:
     title_text_surf = big_font.render(GAME_TITLE, True, Color.WHITE)
     wave_clear_surf = big_font.render("WAVE CLEAR", True, Color.WHITE)
     cursor = pg.cursors.Cursor((CURSOR_RADIUS, CURSOR_RADIUS),
-                               utils.make_circle_image(CURSOR_RADIUS, Color.WHITE, Color.BLACK, 3))
+                               utils.make_circle_image(CURSOR_RADIUS, Color.WHITE, Color.BLACK, 4))
     pg.mouse.set_cursor(cursor)
 
     arena_radius = 1000
     debug = False
     effects = True
-    show_indicators = IndicatorStatus.ALWAYS
+    show_indicators = IndicatorStatus.EMPTY
     force_show_indicators = False
     edge_portal = False
     paused = True
@@ -142,43 +142,16 @@ def main() -> None:
                 if event.button == LEFT_MOUSE_BUTTON and not player.dead:
                     player.thrusting = True
 
-                # Spawn enemies in debug mode.
-                # Do various debug stuff.
+                # Useful debug button.
                 if event.button == MIDDLE_MOUSE_BUTTON and not paused:
                     world_coords = event.pos - camera  # noqa
+                    # wave = 15
                     game_objects.append(sprites.PowerUp(world_coords, (0, 0), random.choice(sprites.RANDOM_POWERUPS)))
-                    # wave = 10
-                    # player.shield = sprites.MAX_SHIELD
-                    game_objects.append(o := sprites.Drone(player))
-                    o.shield = sprites.MAX_SHIELD
+                    # game_objects.append(o := sprites.Drone(player))
+                    # o.shield = sprites.MAX_SHIELD
 
                 if event.button == RIGHT_MOUSE_BUTTON:
                     force_show_indicators = True
-
-                if event.button == RIGHT_MOUSE_BUTTON and not paused and debug:
-                    world_coords = event.pos - camera + (random.randrange(20), random.randrange(20))  # noqa
-                    game_objects.append(sprites.PowerUp(world_coords, (0, 0), random.choice(sprites.RANDOM_POWERUPS)))
-                    shape = random.choice(sprites.RANDOM_SHAPES)
-                    # t = random.choice(sprites.RANDOM_TYPES)
-                    t = None
-                    d = random.random() + 0
-                    o = None
-                    if t is ObjectType.ASTEROID:
-                        game_objects.append(o := sprites.Asteroid(world_coords, shape))
-                    if t is ObjectType.ORBITER:
-                        game_objects.append(o := sprites.Orbiter(world_coords, shape))
-                    if t is ObjectType.RUNNER:
-                        game_objects.append(o := sprites.Runner(world_coords, shape, player))
-                    if t is ObjectType.CHASER:
-                        game_objects.append(o := sprites.Chaser(world_coords, shape, player))
-                    if t is ObjectType.GUNNER:
-                        game_objects.append(o := sprites.Gunner(world_coords, shape, player))
-                    if o:
-                        o.shield = sprites.MAX_SHIELD if random.random() > 0.5 else 0
-                    if o is not None and d > 0.5:
-                        for _ in range(random.randint(2, 6)):
-                            game_objects.append(d := sprites.Drone(o))
-                            d.shield = sprites.MAX_SHIELD if random.random() > 0.8 else 0
 
             if event.type == pg.MOUSEBUTTONUP:
                 if event.button == LEFT_MOUSE_BUTTON:
@@ -212,6 +185,12 @@ def main() -> None:
                 player.dead = False
                 player.pos = pg.Vector2()
                 player.vel = pg.Vector2()
+                player.bullet_damage_up = 0
+                player.rapid_fire = 0
+                player.bullet_speed = 0
+                player.big_thrust = 0.0
+                player.phase = 0.0
+                player.laser = 0.0
 
             # Set up a new wave.
             if new_wave:
@@ -285,7 +264,7 @@ def main() -> None:
                                                                    d=debris_particles, p=player, s=screen, c=camera,
                                                                    b=bullets, e=edge_portal)]
             # Count remaining enemies.
-            enemies_left = len([go for go in game_objects if go.type in sprites.ENEMY_FACTION])
+            enemies_left = len([go for go in game_objects if go.type in sprites.ENEMY_MARKERS])
 
             # Increase wave timer.
             if not enemies_left and not player.dead:
@@ -384,7 +363,7 @@ def main() -> None:
         enemies_not_on_screen = []
         for go in game_objects:
             # Detect offscreen enemies.
-            if go.type in sprites.ENEMY_FACTION and not go.on_screen(screen, camera):
+            if go.type in sprites.ENEMY_MARKERS and not go.on_screen(screen, camera):
                 enemies_not_on_screen.append(go)
             # Draw the game object.
             go.draw(screen, light_source, camera)

@@ -160,18 +160,40 @@ class ObjectType(enum.Enum):
 
 
 class PowerUpType(enum.Enum):
+    # Ship upgrades.
     HEALTH = enum.auto()
-    SHIELD = enum.auto()
-    SHIELD_DRONE = enum.auto()
-    DRONE = enum.auto()
+    THRUST = enum.auto()
+    PHASE = enum.auto()
+    # Bullet upgrades.
     BULLET_DAMAGE = enum.auto()
     RAPID_FIRE = enum.auto()
     BULLET_SPEED = enum.auto()
-    THRUST = enum.auto()
-    PHASE = enum.auto()
+    # Drone upgrades.
+    DRONE = enum.auto()
     BULLET_DRONES = enum.auto()
+    # Only drops from gunners.
     LASER = enum.auto()
+    # Only drops if enemy was shielded.
+    SHIELD = enum.auto()
+    SHIELD_DRONE = enum.auto()
 
+
+BASIC_POWERUPS = (
+    PowerUpType.HEALTH,
+    PowerUpType.THRUST,
+)
+
+BETTER_POWERUPS = (
+    PowerUpType.RAPID_FIRE,
+    PowerUpType.BULLET_DAMAGE,
+    PowerUpType.DRONE,
+)
+
+BEST_POWERUPS = (
+    PowerUpType.PHASE,
+    PowerUpType.BULLET_SPEED,
+    PowerUpType.BULLET_DRONES,
+)
 
 RANDOM_POWERUPS = (
     PowerUpType.BULLET_DAMAGE,
@@ -187,10 +209,37 @@ RANDOM_POWERUPS = (
     PowerUpType.BULLET_SPEED,
 )
 
+DROP_RATE = {
+    ObjectType.POWER_UP: 0,
+    ObjectType.PLAYER: 0,
+    ObjectType.PLAYER_DRONE: 0,
+    ObjectType.ENEMY_DRONE: 0,
+    ObjectType.ASTEROID: 0.2,
+    ObjectType.ORBITER: 0.2,
+    ObjectType.RUNNER: 0.5,
+    ObjectType.CHASER: 0.5,
+    ObjectType.GUNNER: 1,
+}
+
+LOOT: dict[ObjectType, Sequence[PowerUpType]] = {
+    ObjectType.POWER_UP: [],
+    ObjectType.PLAYER: [],
+    ObjectType.PLAYER_DRONE: [],
+    ObjectType.ENEMY_DRONE: [],
+    ObjectType.ASTEROID: BASIC_POWERUPS,
+    ObjectType.ORBITER: BASIC_POWERUPS + BETTER_POWERUPS,
+    ObjectType.RUNNER: BASIC_POWERUPS + BETTER_POWERUPS + BEST_POWERUPS,
+    ObjectType.CHASER: BETTER_POWERUPS + BEST_POWERUPS,
+    ObjectType.GUNNER: (PowerUpType.BULLET_DAMAGE, PowerUpType.RAPID_FIRE,
+                        PowerUpType.BULLET_SPEED, PowerUpType.BULLET_DRONES,
+                        PowerUpType.LASER,
+                        ),
+}
+
 
 PLAYER_FACTION = (ObjectType.PLAYER, ObjectType.PLAYER_DRONE)
-ENEMY_FACTION = (ObjectType.ENEMY_DRONE, ObjectType.ASTEROID, ObjectType.ORBITER, ObjectType.RUNNER, ObjectType.CHASER,
-                 ObjectType.GUNNER)
+ENEMY_MARKERS = (ObjectType.ASTEROID, ObjectType.ORBITER, ObjectType.RUNNER, ObjectType.CHASER, ObjectType.GUNNER)
+ENEMY_FACTION = ENEMY_MARKERS + (ObjectType.ENEMY_DRONE,)
 
 
 TYPE_SCORES = {
@@ -461,8 +510,11 @@ class GameObject:
                     sounds.play(ASTEROID_BREAK_SOUND)
                 # Spawn powerups if not a drone.
                 if self.type in ENEMY_FACTION and self.type is not ObjectType.ENEMY_DRONE:
-                    if random.random() > 0.5:
-                        objects.append(PowerUp(self.pos, self.vel, random.choice(RANDOM_POWERUPS)))
+                    if random.random() > DROP_RATE[self.type]:
+                        loot = LOOT[self.type]
+                        if self.shield:
+                            loot += (PowerUpType.SHIELD, PowerUpType.SHIELD_DRONE)
+                        objects.append(PowerUp(self.pos, self.vel, random.choice(loot)))
             return False
         self.pos += self.vel * dt
         if self.pos.length_squared() > arena_radius ** 2:
