@@ -69,12 +69,24 @@ HP_POLYGON = (
     (5, 10),
 )
 
+DRONE_POLYGON = (
+    (0, -10),
+    (2, -2),
+    (10, 0),
+    (2, 2),
+    (0, 10),
+    (-2, 2),
+    (-10, 0),
+    (-2, -2),
+)
+
 PLAYER_THRUSTER_POS = (0, 10)
 PLAYER_GUN_POS = (0, -20)
 
 PLAYER_BULLET_RADIUS = 5
 PLAYER_BULLET_SPEED = 500
 PLAYER_FIRE_RATE = 500
+DRONE_FIRE_RATE = 1000
 PLAYER_BULLET_DAMAGE = 1
 
 ENEMY_BULLET_RADIUS = 5
@@ -88,9 +100,15 @@ POWERUP_SUCK_DISTANCE = 200
 
 ARENA_BOUNCE = 0.6
 
+BIG_BULLET_RADIUS = 10
+BIG_BULLET_DAMAGE = 2
+BIG_BULLET_SPEED = 1000
+BIG_PLAYER_FIRE_RATE = 200
+RAPIDFIRE_RADIUS = 3
 MAX_SHIELD = 10
 SHIELD_BONUS = 2
 
+LASER_DAMAGE = 1
 BOUNCE_DAMAGE = 1
 BOUNCE_I_FRAMES = 250
 DAMAGE_FLASH_MS = 250
@@ -144,10 +162,30 @@ class ObjectType(enum.Enum):
 class PowerUpType(enum.Enum):
     HEALTH = enum.auto()
     SHIELD = enum.auto()
+    SHIELD_DRONE = enum.auto()
     DRONE = enum.auto()
+    BULLET_DAMAGE = enum.auto()
+    RAPID_FIRE = enum.auto()
+    BULLET_SPEED = enum.auto()
+    THRUST = enum.auto()
+    PHASE = enum.auto()
+    BULLET_DRONES = enum.auto()
+    LASER = enum.auto()
 
 
-RANDOM_POWERUPS = (PowerUpType.HEALTH, PowerUpType.SHIELD, PowerUpType.DRONE)
+RANDOM_POWERUPS = (
+    PowerUpType.BULLET_DAMAGE,
+    PowerUpType.RAPID_FIRE,
+    PowerUpType.HEALTH,
+    PowerUpType.THRUST,
+    PowerUpType.SHIELD,
+    PowerUpType.DRONE,
+    PowerUpType.BULLET_DRONES,
+    PowerUpType.SHIELD_DRONE,
+    PowerUpType.PHASE,
+    PowerUpType.LASER,
+    PowerUpType.BULLET_SPEED,
+)
 
 
 PLAYER_FACTION = (ObjectType.PLAYER, ObjectType.PLAYER_DRONE)
@@ -271,12 +309,13 @@ class Button:
 
 
 class ThrustParticle(utils.Particle):
-    def __init__(self, pos: Sequence[float], vel: Sequence[float]):
+    def __init__(self, pos: Sequence[float], vel: Sequence[float], big: bool = False):
         self.pos = pg.Vector2(pos)  # noqa
         self.vel = pg.Vector2(vel)  # noqa
         self.radius = random.randint(3, 5)
         self.start_time = pg.time.get_ticks()
-        self.life_time = random.randint(200, 350)
+        self.life_time = random.randint(200, 500 if big else 350)
+        self.color = Color.BIG_THRUST if big else Color.THRUST
 
     def update(self, dt: float, *args, **kwargs) -> bool:
         if pg.time.get_ticks() - self.start_time >= self.life_time:
@@ -288,16 +327,27 @@ class ThrustParticle(utils.Particle):
         return self.pos - (self.radius, self.radius)
 
     def cache_lookup(self) -> Hashable:
-        return self.radius
+        return self.radius, self.color
 
 
 class Bullet(utils.Particle):
-    def __init__(self, pos: Sequence[float], vel: Sequence[float], owner: "GameObject"):
+    def __init__(self, pos: Sequence[float], vel: Sequence[float], owner: "GameObject", player: "Player"):
         self.pos = pg.Vector2(pos)  # noqa
         self.vel = pg.Vector2(vel)  # noqa
-        self.radius = PLAYER_BULLET_RADIUS if owner.type in PLAYER_FACTION else ENEMY_BULLET_RADIUS
-        self.damage = PLAYER_BULLET_DAMAGE if owner.type in PLAYER_FACTION else ENEMY_BULLET_DAMAGE
         self.owner = owner
+        self.color = owner.color
+        if owner.type in PLAYER_FACTION:
+            self.color = Color.YELLOW if player.rapid_fire else player.color  # Drones also fire green bullets.
+            self.radius = RAPIDFIRE_RADIUS if player.rapid_fire else PLAYER_BULLET_RADIUS
+            if player.bullet_damage_up:
+                self.radius = BIG_BULLET_RADIUS
+                self.color = Color.CYAN
+            if player.bullet_speed:
+                self.color = Color.WHITE
+            self.damage = BIG_BULLET_DAMAGE if player.bullet_damage_up else PLAYER_BULLET_DAMAGE
+        else:
+            self.radius = ENEMY_BULLET_RADIUS
+            self.damage = ENEMY_BULLET_DAMAGE
 
     def update(self, dt: float, *args, **kwargs) -> bool:
         # Despawn outside of arena bounds.
@@ -331,7 +381,7 @@ class Bullet(utils.Particle):
         return self.pos - (self.radius, self.radius)
 
     def cache_lookup(self) -> Hashable:
-        return self.owner.color
+        return self.radius, self.color
 
 
 class DebrisParticle(utils.Particle):
@@ -421,6 +471,19 @@ class GameObject:
             else:
                 self.pos.scale_to_length(arena_radius)
                 self.vel = self.vel.reflect(self.pos) * ARENA_BOUNCE
+        # Get hit by the laser.
+        player = kwargs["p"]
+        ticks = pg.time.get_ticks()
+        if self.type in ENEMY_FACTION and player.thrusting and player.laser:
+            p2 = utils.polar_vector(arena_radius * 2, player.angle - 90)  # The laser spans the entire arena.
+            if utils.collide_circle_line(player.pos, p2, self.pos, self.radius + 10):
+                self.shield = 0  # Lasers destroy shields.
+                if ticks - self.last_hit >= BOUNCE_I_FRAMES:
+                    self.last_hit = ticks
+                    self.shield_bypass = True  # Play break sound offscreen.
+                    self.health -= LASER_DAMAGE
+                    sounds.play(ASTEROID_HIT_SOUND)
+        # Collide with other objects.
         for go in objects:
             if go is self:
                 continue
@@ -431,8 +494,11 @@ class GameObject:
                 # Apply powerups.
                 if self.type is ObjectType.POWER_UP:
                     if go.type in PLAYER_FACTION:
-                        kwargs["p"].apply_powerup(self.p_type, sounds, objects)  # noqa
+                        player.apply_powerup(self.p_type, sounds, objects)  # noqa
                         return False
+                    continue
+                # Don't collide if phasing.
+                if self is player and self.phase and self.thrusting:  # noqa
                     continue
                 # Player and player drones don't collide.
                 if self.type in PLAYER_FACTION and go.type in PLAYER_FACTION:
@@ -443,11 +509,11 @@ class GameObject:
                 # Enemies don't collide with enemy drones.
                 if self.type in ENEMY_FACTION and go.type is ObjectType.ENEMY_DRONE:
                     continue
-                # Don't collide with a dead player.
-                if self.type in ENEMY_FACTION and go.type is ObjectType.PLAYER and kwargs["p"].dead:
-                    continue
+                # Don't collide with a dead or phasing player.
+                if self.type in ENEMY_FACTION and go.type is ObjectType.PLAYER:
+                    if player.dead or (player.phase and player.thrusting):
+                        continue
                 # Decrease health if i-frames allow.
-                ticks = pg.time.get_ticks()
                 if ticks - self.last_hit >= BOUNCE_I_FRAMES:
                     self.shield_bypass = False
                     self.last_hit = ticks
@@ -463,8 +529,8 @@ class GameObject:
                     else:
                         go.health -= BOUNCE_DAMAGE
                 # Play sound if player.
-                if self is kwargs["p"] or go is kwargs["p"]:
-                    sounds.play(SHIELD_HIT_SOUND if kwargs["p"].shield > 0 else PLAYER_HIT_SOUND)
+                if self is player or go is player:
+                    sounds.play(SHIELD_HIT_SOUND if player.shield > 0 else PLAYER_HIT_SOUND)
                 # Move self away so they are no longer colliding.
                 unstick_vector = self.pos - go.pos
                 unstick_vector.scale_to_length(self.radius + go.radius - self.pos.distance_to(go.pos))
@@ -542,13 +608,49 @@ class PowerUp(GameObject):
 
     def draw(self, screen: pg.Surface, light_source: Sequence[float], camera: Sequence[float]):
         color = Color.WHITE
+        radius = 2
+        if self.p_type is PowerUpType.LASER:
+            color = Color.RED
+            p = 7
+            p1, p2 = (-p, -p), (p, p)
+            pg.draw.line(screen, color, self.pos + camera + p1, self.pos + camera + p2, 3)  # noqa
+            p1, p2 = (-p, p), (p, -p)
+            pg.draw.line(screen, color, self.pos + camera + p1, self.pos + camera + p2, 3)  # noqa
+            p1, p2 = (0, -p), (0, p)
+            pg.draw.line(screen, color, self.pos + camera + p1, self.pos + camera + p2, 3)  # noqa
+            p1, p2 = (-p, 0), (p, 0)
+            pg.draw.line(screen, color, self.pos + camera + p1, self.pos + camera + p2, 3)  # noqa
         if self.p_type is PowerUpType.HEALTH:
             color = Color.GREEN
+            pg.draw.polygon(screen, color, [self.pos + p + camera for p in HP_POLYGON])  # noqa
+        if self.p_type is PowerUpType.THRUST:
+            color = Color.ORANGE
+            pg.draw.polygon(screen, color, [self.pos + p + camera for p in HP_POLYGON])  # noqa
+        if self.p_type is PowerUpType.PHASE:
+            color = Color.CYAN
+            pg.draw.polygon(screen, color, [self.pos + p + camera for p in HP_POLYGON])  # noqa
         if self.p_type is PowerUpType.SHIELD:
             color = Color.BLUE
+            pg.draw.polygon(screen, color, [self.pos + p + camera for p in HP_POLYGON])  # noqa
         if self.p_type is PowerUpType.DRONE:
             color = Color.CYAN
-        pg.draw.circle(screen, color, self.pos + camera, self.radius, 5)  # noqa
+            pg.draw.polygon(screen, color, [self.pos + p + camera for p in DRONE_POLYGON])  # noqa
+        if self.p_type is PowerUpType.SHIELD_DRONE:
+            color = Color.BLUE
+            pg.draw.polygon(screen, color, [self.pos + p + camera for p in DRONE_POLYGON])  # noqa
+        if self.p_type is PowerUpType.BULLET_DRONES:
+            color = Color.GREEN
+            pg.draw.polygon(screen, color, [self.pos + p + camera for p in DRONE_POLYGON])  # noqa
+        if self.p_type is PowerUpType.BULLET_DAMAGE:
+            color = Color.CYAN
+            pg.draw.circle(screen, color, self.pos + camera, PLAYER_BULLET_RADIUS)  # noqa
+        if self.p_type is PowerUpType.RAPID_FIRE:
+            color = Color.YELLOW
+            pg.draw.circle(screen, color, self.pos + camera, RAPIDFIRE_RADIUS)  # noqa
+        if self.p_type is PowerUpType.BULLET_SPEED:
+            color = Color.WHITE
+            pg.draw.circle(screen, color, self.pos + camera, PLAYER_BULLET_RADIUS)  # noqa
+        pg.draw.circle(screen, color, self.pos + camera, self.radius, radius)  # noqa
 
 
 class Orbiter(GameObject):
@@ -623,7 +725,7 @@ class Gunner(GameObject):
                 vel_vector = utils.polar_vector(-ENEMY_BULLET_SPEED, self.angle + 90)
                 gun_pos = self.target.pos - self.pos
                 gun_pos.scale_to_length(self.radius)
-                kwargs["b"].add(Bullet(self.pos + gun_pos, self.vel + vel_vector, self))
+                kwargs["b"].add(Bullet(self.pos + gun_pos, self.vel + vel_vector, self, kwargs["p"]))
         else:
             self.acc = self.target.pos - self.pos
             self.acc.scale_to_length(THRUST[self.shape])
@@ -641,6 +743,8 @@ class Drone(GameObject):
         self.acc = pg.Vector2()
         self.turn_speed = random.randint(-100, 100)
         self.owner = owner
+        self.bullets = False
+        self.last_fire = 0
 
     def update(self, dt: float, arena_radius: int, objects, sounds, **kwargs) -> bool:
         # Convert to player drone if enemy owner was killed.
@@ -656,6 +760,14 @@ class Drone(GameObject):
         self.acc = self.owner.pos - self.pos
         self.acc.scale_to_length(THRUST[self.shape])
         self.vel += self.acc * dt
+        # Fire bullets.
+        if self.bullets and self.owner.thrusting and not self.owner.laser:
+            fire_rate = PLAYER_FIRE_RATE if self.owner.rapid_fire else DRONE_FIRE_RATE
+            if pg.time.get_ticks() - self.last_fire >= fire_rate:
+                self.last_fire = pg.time.get_ticks()
+                speed = -BIG_BULLET_SPEED if self.owner.bullet_speed else -PLAYER_BULLET_SPEED
+                vel_vector = utils.polar_vector(speed, self.owner.angle + 90)
+                kwargs["b"].add(Bullet(self.pos, self.vel + vel_vector, self, self.owner))
         return super().update(dt, arena_radius, objects, sounds, **kwargs)
 
 
@@ -668,6 +780,13 @@ class Player(GameObject):
         self.gun_pos = self.pos + pg.Vector2(PLAYER_GUN_POS).rotate(self.angle)
         self.last_fire = 0
         self.dead = False
+        # Powerup trackers.
+        self.bullet_damage_up = 0
+        self.rapid_fire = 0
+        self.bullet_speed = 0
+        self.big_thrust = 0.0
+        self.phase = 0.0
+        self.laser = 0.0
 
     def apply_powerup(self, type_: PowerUpType, sounds, objects):
         sounds.play(POWERUP_SOUND)
@@ -675,8 +794,34 @@ class Player(GameObject):
             self.health += 1
         if type_ is PowerUpType.SHIELD:
             self.shield = MAX_SHIELD
+        if type_ is PowerUpType.SHIELD_DRONE:
+            for go in objects:
+                if go.type is ObjectType.PLAYER_DRONE:
+                    go.shield = MAX_SHIELD
         if type_ is PowerUpType.DRONE:
             objects.append(Drone(self))
+        if type_ is PowerUpType.BULLET_DAMAGE:
+            self.bullet_damage_up = 50
+        if type_ is PowerUpType.BULLET_SPEED:
+            self.bullet_speed = 50
+        if type_ is PowerUpType.RAPID_FIRE:
+            self.rapid_fire = 200
+        if type_ is PowerUpType.THRUST:
+            self.big_thrust = 10.0
+        if type_ is PowerUpType.PHASE:
+            self.phase = 10.0
+        if type_ is PowerUpType.BULLET_DRONES:
+            for go in objects:
+                if go.type is ObjectType.PLAYER_DRONE:
+                    go.bullets = True
+                    go.color = COLORS[self.type]
+        if type_ is PowerUpType.LASER:
+            self.laser = 2.0
+
+    def decrease_bullet_pups(self):
+        self.bullet_damage_up = max(0, self.bullet_damage_up - 1)
+        self.rapid_fire = max(0, self.rapid_fire - 1)
+        self.bullet_speed = max(0, self.bullet_speed - 1)
 
     def update(self, dt: float, arena_radius: int, objects, sounds, **kwargs) -> bool:
         if self.dead:
@@ -691,12 +836,22 @@ class Player(GameObject):
         self.thrust_pos = self.pos + pg.Vector2(PLAYER_THRUSTER_POS).rotate(self.angle)
         self.gun_pos = self.pos + pg.Vector2(PLAYER_GUN_POS).rotate(self.angle)
         if self.thrusting:
-            self.acc.from_polar((-THRUST[self.shape], self.angle + 90))
-            if pg.time.get_ticks() - self.last_fire >= PLAYER_FIRE_RATE:
-                sounds.play(FIRE_GUN_SOUND)
-                self.last_fire = pg.time.get_ticks()
-                vel_vector = utils.polar_vector(-PLAYER_BULLET_SPEED, self.angle + 90)
-                kwargs["b"].add(Bullet(self.gun_pos, self.vel + vel_vector, self))
+            thrust_mult = 2 if self.big_thrust else 1
+            self.acc.from_polar((-THRUST[self.shape] * thrust_mult, self.angle + 90))
+            self.big_thrust = max(0.0, self.big_thrust - dt)
+            self.phase = max(0.0, self.phase - dt)
+            self.laser = max(0.0, self.laser - dt)
+            if self.laser:
+                pass
+            else:
+                fire_rate = BIG_PLAYER_FIRE_RATE if self.rapid_fire else PLAYER_FIRE_RATE
+                if pg.time.get_ticks() - self.last_fire >= fire_rate:
+                    sounds.play(FIRE_GUN_SOUND)
+                    self.last_fire = pg.time.get_ticks()
+                    speed = -BIG_BULLET_SPEED if self.bullet_speed else -PLAYER_BULLET_SPEED
+                    vel_vector = utils.polar_vector(speed, self.angle + 90)
+                    kwargs["b"].add(Bullet(self.gun_pos, self.vel + vel_vector, self, self))
+                    self.decrease_bullet_pups()
         else:
             self.acc = pg.Vector2()
         self.vel += self.acc * dt
@@ -704,4 +859,9 @@ class Player(GameObject):
 
     def draw(self, screen: pg.Surface, light_source: Sequence[float], camera: Sequence[float]):
         if not self.dead:
+            if self.phase:
+                self.color = Color.PHASE_COLOR
+                if self.thrusting:
+                    self.color = Color.PHASING_COLOR
             super().draw(screen, light_source, camera)
+            self.color = COLORS[self.type]

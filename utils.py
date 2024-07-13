@@ -21,6 +21,15 @@ class Sounds:
             self.sounds[sound].play()
 
 
+def collide_circle_line(p1: pg.Vector2, p2: pg.Vector2, center: pg.Vector2, radius: int) -> bool:
+    """Return whether a line segment intersects with a circle."""
+    v = p2 - p1
+    a = v * v
+    b = 2 * v.dot(p1 - center)
+    c = p1.dot(p1) + center.dot(center) - 2 * p1.dot(center) - radius**2
+    return b**2 - 4 * a * c >= 0
+
+
 def polar_vector(length: float, angle: float) -> pg.Vector2:
     """Return a Vector2 with the given length and angle in degrees."""
     vec = pg.Vector2()

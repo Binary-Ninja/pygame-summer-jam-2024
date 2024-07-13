@@ -3,7 +3,6 @@
 import random
 import enum
 import math
-import functools
 import sys
 from pathlib import Path
 
@@ -25,7 +24,7 @@ RIGHT_MOUSE_BUTTON = 3
 
 GAME_TITLE = "POLYBOIDS"
 WINDOWED_RESOLUTION = pg.Vector2(800, 600)
-CURSOR_RADIUS = 7
+CURSOR_RADIUS = 9
 FPS_CAP = 0
 
 MIN_ARENA_EDGE_THICKNESS = 3
@@ -106,23 +105,14 @@ def main() -> None:
     player.dead = True
 
     # Particle groups.
-    make_image = functools.partial(utils.make_circle_image, color=Color.THRUST, trans_color=Color.BLACK)
-    thrust_particles = utils.ParticleGroup(utils.ImageCache(make_image), pg.BLEND_ADD)
-
-    def make_bullet_image(c: tuple[int, int, int]) -> pg.Surface:
-        return utils.make_circle_image(sprites.PLAYER_BULLET_RADIUS, c, Color.BLACK)
-
-    bullets = utils.ParticleGroup(utils.ImageCache(make_bullet_image))  # noqa
-
-    def make_debris_image(item: tuple[int, tuple[int, int, int]]) -> pg.Surface:
+    def make_circle_image(item: tuple[int, tuple[int, int, int]]) -> pg.Surface:
         return utils.make_circle_image(item[0], item[1], Color.BLACK)
+    particle_image_cache = utils.ImageCache(make_circle_image)  # noqa
 
-    debris_particles = utils.ParticleGroup(utils.ImageCache(make_debris_image))  # noqa
-
-    def make_nebula_image(item: tuple[int, tuple[int, int, int]]) -> pg.Surface:
-        return utils.make_circle_image(item[0], item[1], Color.BLACK)
-
-    nebula_particles = utils.ParticleGroup(utils.ImageCache(make_nebula_image), pg.BLEND_ADD)  # noqa
+    thrust_particles = utils.ParticleGroup(particle_image_cache, pg.BLEND_ADD)
+    bullets = utils.ParticleGroup(particle_image_cache)
+    debris_particles = utils.ParticleGroup(particle_image_cache)
+    nebula_particles = utils.ParticleGroup(particle_image_cache, pg.BLEND_ADD)
 
     while True:
         for event in pg.event.get():
@@ -153,8 +143,12 @@ def main() -> None:
                     player.thrusting = True
 
                 # Spawn enemies in debug mode.
-                if event.button == MIDDLE_MOUSE_BUTTON and not paused and debug:
-                    player.shield = sprites.MAX_SHIELD
+                # Do various debug stuff.
+                if event.button == MIDDLE_MOUSE_BUTTON and not paused:
+                    world_coords = event.pos - camera  # noqa
+                    game_objects.append(sprites.PowerUp(world_coords, (0, 0), random.choice(sprites.RANDOM_POWERUPS)))
+                    # wave = 10
+                    # player.shield = sprites.MAX_SHIELD
                     game_objects.append(o := sprites.Drone(player))
                     o.shield = sprites.MAX_SHIELD
 
@@ -165,7 +159,7 @@ def main() -> None:
                     world_coords = event.pos - camera + (random.randrange(20), random.randrange(20))  # noqa
                     game_objects.append(sprites.PowerUp(world_coords, (0, 0), random.choice(sprites.RANDOM_POWERUPS)))
                     shape = random.choice(sprites.RANDOM_SHAPES)
-                    t = random.choice(sprites.RANDOM_TYPES)
+                    # t = random.choice(sprites.RANDOM_TYPES)
                     t = None
                     d = random.random() + 0
                     o = None
@@ -283,7 +277,8 @@ def main() -> None:
             if player.thrusting:
                 vel_vector = utils.polar_vector(random.randint(150, 200),
                                                 player.angle + 90 + random.randint(-15, 15))
-                thrust_particles.add(sprites.ThrustParticle(player.thrust_pos, player.vel + vel_vector))
+                big = player.big_thrust > 0
+                thrust_particles.add(sprites.ThrustParticle(player.thrust_pos, player.vel + vel_vector, big))
 
             # Update game objects.
             game_objects = [go for go in game_objects if go.update(dt, arena_radius, game_objects, sounds,
@@ -402,6 +397,13 @@ def main() -> None:
         thrust_particles.draw(screen, camera)
         bullets.draw(screen, camera)
 
+        # Draw the laser.
+        if player.thrusting and player.laser:
+            p2 = utils.polar_vector(screen.width, player.angle - 90)
+            pg.draw.line(screen, Color.RED, player.pos + camera, player.pos + camera + p2, 9)
+            pg.draw.line(screen, Color.ORANGE, player.pos + camera, player.pos + camera + p2, 5)
+            pg.draw.line(screen, Color.WHITE, player.pos + camera, player.pos + camera + p2, 1)
+
         # Draw offscreen enemy indicators.
         # Indicators are triangles that point towards the enemy.
         # This essentially creates a minimap for the player to locate the remaining enemies.
@@ -487,13 +489,14 @@ def main() -> None:
             color_button.draw(screen, font, f" ARENA EFFECTS: {"ON" if effects else "OFF"}")
             fullscreen_button.draw(screen, font, f" (F4) FULLSCREEN: {"ON" if fullscreen else "OFF"}")
             quit_button.draw(screen, font, " (CTRL+Q) QUIT", Color.RED)
-            help_surf = font.render("MOUSE TO MOVE, LEFT CLICK TO FIRE AND THRUST", True, Color.WHITE)
+            help_surf = font.render("MOVE MOUSE TO ROTATE, LEFT CLICK TO FIRE AND THRUST", True, Color.WHITE)
             screen.blit(help_surf, help_surf.get_rect(centerx=screen.get_rect().centerx, bottom=screen.height - 25))
-            help_surf = font.render("RIGHT CLICK TO VIEW OFFSCREEN MARKERS", True, Color.WHITE)
+            help_surf = font.render("HOLD RIGHT CLICK TO VIEW OFFSCREEN MARKERS", True, Color.WHITE)
             screen.blit(help_surf, help_surf.get_rect(centerx=screen.get_rect().centerx, bottom=screen.height))
 
         if debug:
-            fps_surf = font.render(f"{nebula_particles.size}\n{clock.get_fps():.2f}", True, Color.WHITE, Color.BLACK)
+            fps_surf = font.render(f"{nebula_particles.size}\n{clock.get_fps():.2f}",
+                                   True, Color.WHITE)
             screen.blit(fps_surf, (0, screen.height - fps_surf.height))
 
         pg.display.flip()
