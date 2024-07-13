@@ -135,6 +135,10 @@ class ParticleGroup:
         else:
             self.particles.extend(particles)
 
+    def clear(self):
+        """Clear the group of all the particles."""
+        self.particles = []
+
     def update(self, dt: float, *args, **kwargs):
         self.particles = [p for p in self.particles if p.update(dt, *args, **kwargs)]
 

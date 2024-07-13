@@ -82,18 +82,25 @@ ENEMY_BULLET_SPEED = 500
 ENEMY_FIRE_RATE = 1000
 ENEMY_BULLET_DAMAGE = 1
 
-RUNNER_RUN_DISTANCE = 400
+RUNNER_RUN_DISTANCE = 500
 GUNNER_GUN_DISTANCE = 300
 
 ARENA_BOUNCE = 0.8
+
+MAX_SHIELD = 10
+SHIELD_BONUS = 2
 
 BOUNCE_DAMAGE = 1
 BOUNCE_I_FRAMES = 200
 DAMAGE_FLASH_MS = 200
 
 ASTEROID_HIT_SOUND = "explosion.wav"
+PLAYER_HIT_SOUND = "player_hit.wav"
 ASTEROID_BREAK_SOUND = "asteroid_break.wav"
 FIRE_GUN_SOUND = "fire_gun.wav"
+SHIELD_HIT_SOUND = "shield_hit.wav"
+ENEMY_FIRE_GUN_SOUND = "enemy_gun.wav"
+PLAYER_DEATH_SOUND = "player_death.wav"
 
 
 class ObjectShape(enum.Enum):
@@ -107,10 +114,10 @@ class ObjectShape(enum.Enum):
 
 SHAPE_SCORES = {
     ObjectShape.DRONE: 2,
-    ObjectShape.TRIANGLE: 4,
-    ObjectShape.SQUARE: 6,
-    ObjectShape.HEXAGON: 8,
-    ObjectShape.OCTAGON: 12,
+    ObjectShape.TRIANGLE: 3,
+    ObjectShape.SQUARE: 4,
+    ObjectShape.HEXAGON: 6,
+    ObjectShape.OCTAGON: 8,
     ObjectShape.PLAYER: 0,
 }
 
@@ -168,10 +175,10 @@ RADII = {
 
 HEALTH = {
     ObjectShape.DRONE: 2,
-    ObjectShape.TRIANGLE: 4,
-    ObjectShape.SQUARE: 6,
-    ObjectShape.HEXAGON: 8,
-    ObjectShape.OCTAGON: 12,
+    ObjectShape.TRIANGLE: 3,
+    ObjectShape.SQUARE: 4,
+    ObjectShape.HEXAGON: 6,
+    ObjectShape.OCTAGON: 8,
     ObjectShape.PLAYER: 10,
 }
 
@@ -209,9 +216,9 @@ def centroid(points: Sequence[Sequence[float]]) -> tuple[float, float]:
 
 
 class Button:
-    def __init__(self, y_offset: int):
+    def __init__(self, y_offset: int, height: int = 45):
         self.y_offset = y_offset
-        self.rect = pg.Rect(0, 0, 0, 50)
+        self.rect = pg.Rect(0, 0, 0, height)
         self.hover = False
         self.pressed = False
 
@@ -275,20 +282,22 @@ class Bullet(utils.Particle):
         # Despawn outside of arena bounds.
         if self.pos.length_squared() > kwargs["arena_radius"] ** 2:
             return False
-        for game_object in kwargs["game_objects"]:
+        for go in kwargs["game_objects"]:
             # Don't damage those of your faction.
-            if self.owner.type in PLAYER_FACTION and game_object.type in PLAYER_FACTION:
+            if self.owner.type in PLAYER_FACTION and go.type in PLAYER_FACTION:
                 continue
-            if self.owner.type in ENEMY_FACTION and game_object.type in ENEMY_FACTION:
+            if self.owner.type in ENEMY_FACTION and go.type in ENEMY_FACTION:
                 continue
             # Collide and deal damage.
-            if self.pos.distance_squared_to(game_object.pos) < (game_object.radius + self.radius) ** 2:
-                game_object.health -= self.damage
-                if game_object.health > 0 and not game_object.type is ObjectType.PLAYER_DRONE:
-                    kwargs["sounds"].play(ASTEROID_HIT_SOUND)
-                if game_object.health <= 0 and self.owner.type in PLAYER_FACTION:
-                    kwargs["scores"].append(SHAPE_SCORES[game_object.shape] * TYPE_SCORES[game_object.type])
-                game_object.last_hit = pg.time.get_ticks()
+            if self.pos.distance_squared_to(go.pos) < (go.radius + self.radius) ** 2:
+                go.health -= self.damage
+                go.shield_bypass = True
+                if go.health > 0 and go.type is not ObjectType.PLAYER_DRONE:
+                    kwargs["sounds"].play(PLAYER_HIT_SOUND if go.type is ObjectType.PLAYER else ASTEROID_HIT_SOUND)
+                if go.health <= 0 and self.owner.type in PLAYER_FACTION:
+                    bonus = SHIELD_BONUS if go.shield > 0 else 1
+                    kwargs["scores"].append(SHAPE_SCORES[go.shape] * TYPE_SCORES[go.type] * bonus)
+                go.last_hit = pg.time.get_ticks()
                 return False
         self.pos += self.vel * dt
         return True
@@ -357,6 +366,8 @@ class GameObject:
         self.radius = RADII[shape]
         self.health = HEALTH[shape]
         self.last_hit = 0
+        self.shield_bypass = False
+        self.shield = 0
 
     def on_screen(self, screen, camera):
         return screen.get_rect().inflate(20, 20).collidepoint(self.pos + camera)
@@ -366,7 +377,7 @@ class GameObject:
             for _ in range(40):
                 vel_vector = utils.polar_vector(-random.randint(60, 120), random.randrange(360))
                 kwargs["d"].add(DebrisParticle(self.pos, vel_vector, self.color))
-            if self.on_screen(kwargs["s"], kwargs["c"]):
+            if self.on_screen(kwargs["s"], kwargs["c"]) or self.shield_bypass:
                 sounds.play(ASTEROID_BREAK_SOUND)
             return False
         self.pos += self.vel * dt
@@ -386,17 +397,28 @@ class GameObject:
                 # Enemies don't collide with enemy drones.
                 if self.type in ENEMY_FACTION and go.type is ObjectType.ENEMY_DRONE:
                     continue
+                # Don't collide with a dead player.
+                if self.type in ENEMY_FACTION and go.type is ObjectType.PLAYER and kwargs["p"].dead:
+                    continue
                 # Decrease health if i-frames allow.
                 ticks = pg.time.get_ticks()
                 if ticks - self.last_hit >= BOUNCE_I_FRAMES:
+                    self.shield_bypass = False
                     self.last_hit = ticks
-                    self.health -= BOUNCE_DAMAGE
+                    if self.shield > 0:
+                        self.shield -= 1
+                    else:
+                        self.health -= BOUNCE_DAMAGE
                 if ticks - go.last_hit >= BOUNCE_I_FRAMES:
+                    go.shield_bypass = False
                     go.last_hit = ticks
-                    go.health -= BOUNCE_DAMAGE
+                    if go.shield > 0:
+                        go.shield -= 1
+                    else:
+                        go.health -= BOUNCE_DAMAGE
                 # Play sound if player.
                 if self is kwargs["p"] or go is kwargs["p"]:
-                    sounds.play(ASTEROID_HIT_SOUND)
+                    sounds.play(SHIELD_HIT_SOUND if kwargs["p"].shield > 0 else PLAYER_HIT_SOUND)
                 # Move self away so they are no longer colliding.
                 unstick_vector = self.pos - go.pos
                 unstick_vector.scale_to_length(self.radius + go.radius - self.pos.distance_to(go.pos))
@@ -410,6 +432,8 @@ class GameObject:
         return True
 
     def draw(self, screen: pg.Surface, light_source: Sequence[float], camera: Sequence[float]):
+        # Detect if under damage flash effect.
+        flash_effect = pg.time.get_ticks() - self.last_hit < DAMAGE_FLASH_MS
         # Draw each polygon separately.
         for polygon in self.polygons:
             # Calculate the world coordinates for each point, rotating as needed.
@@ -429,12 +453,20 @@ class GameObject:
             # Sometimes lighting falls outside range, so we clamp it again to [0, 1].
             color = darken(self.color, pg.math.clamp(lighting, 0, 1))
             # Lighten the color for the flash animation when taking damage.
-            if pg.time.get_ticks() - self.last_hit < DAMAGE_FLASH_MS:
-                color = lighten(color, 0.5)
+            if flash_effect and (self.shield <= 0 or self.shield_bypass):
+                color = lighten(color, 0.25)
             # Draw the solid face.
             pg.draw.polygon(screen, color, draw_points)
             # Draw the outline.
             pg.draw.aalines(screen, self.color, True, draw_points)
+        # Draw the shield.
+        if self.shield > 0:
+            width = 2
+            color = pg.Color(Color.SHIELD_EMPTY_COLOR).lerp(Color.SHIELD_FULL_COLOR, self.shield / MAX_SHIELD)
+            if flash_effect and not self.shield_bypass:
+                width = 4
+                color = Color.WHITE
+            pg.draw.circle(screen, color, self.pos + camera, self.radius + 10, width)  # noqa
 
 
 class Asteroid(GameObject):
@@ -449,13 +481,13 @@ class Asteroid(GameObject):
 
 
 class Orbiter(GameObject):
-    def __init__(self, pos: Sequence[float], shape: ObjectShape, target: Sequence[float] = (0, 0)):
-        vel = (pg.Vector2(target) - pos).rotate(random.choice((90, -90)))  # noqa
+    def __init__(self, pos: Sequence[float], shape: ObjectShape):
+        self.target = utils.random_vector(500)
+        vel = (pg.Vector2(self.target) - pos).rotate(random.choice((90, -90)))  # noqa
         vel.scale_to_length(random.randrange(int(vel.length())))
         super().__init__(pos, shape, ObjectType.ORBITER, vel)
         self.acc = pg.Vector2()
         self.turn_speed = random.randint(-100, 100)
-        self.target = target
 
     def update(self, dt: float, arena_radius: int, objects, sounds, **kwargs) -> bool:
         self.angle += self.turn_speed * dt
@@ -487,6 +519,7 @@ class Runner(GameObject):
         super().__init__(pos, shape, ObjectType.RUNNER, vel)
         self.acc = pg.Vector2()
         self.target = target
+        self.orbit = utils.random_vector(500)
 
     def update(self, dt: float, arena_radius: int, objects, sounds, **kwargs) -> bool:
         self.angle = pg.Vector2().angle_to(self.target.pos - self.pos) + 90
@@ -495,7 +528,7 @@ class Runner(GameObject):
             self.acc.scale_to_length(THRUST[self.shape])
             self.vel += self.acc * dt
         else:
-            self.acc = self.target.pos - self.pos
+            self.acc = self.orbit - self.pos
             self.acc.scale_to_length(THRUST[self.shape])
             self.vel += self.acc * dt
         return super().update(dt, arena_radius, objects, sounds, **kwargs)
@@ -515,54 +548,42 @@ class Gunner(GameObject):
             self.acc.scale_to_length(THRUST[self.shape])
             self.vel += self.acc * dt
             if pg.time.get_ticks() - self.last_fire >= ENEMY_FIRE_RATE:
-                sounds.play(FIRE_GUN_SOUND)
+                sounds.play(ENEMY_FIRE_GUN_SOUND)
                 self.last_fire = pg.time.get_ticks()
                 vel_vector = utils.polar_vector(-ENEMY_BULLET_SPEED, self.angle + 90)
                 gun_pos = self.target.pos - self.pos
                 gun_pos.scale_to_length(self.radius)
                 kwargs["b"].add(Bullet(self.pos + gun_pos, self.vel + vel_vector, self))
         else:
-            self.acc = (0, 0) - self.pos
+            self.acc = self.target.pos - self.pos
             self.acc.scale_to_length(THRUST[self.shape])
             self.vel += self.acc * dt
         return super().update(dt, arena_radius, objects, sounds, **kwargs)
 
 
-class PlayerDrone(GameObject):
-    def __init__(self, player: GameObject):
-        pos = player.pos + utils.random_vector(100, 50)
-        vel = (player.pos - pos).rotate(random.choice((90, -90)))
+class Drone(GameObject):
+    def __init__(self, owner: GameObject):
+        pos = owner.pos + utils.random_vector(100, 50)
+        vel = (owner.pos - pos).rotate(random.choice((90, -90)))
         vel.scale_to_length(random.randint(50, 200))
-        super().__init__(pos, ObjectShape.DRONE, ObjectType.PLAYER_DRONE, vel)
+        t = ObjectType.PLAYER_DRONE if owner.type in PLAYER_FACTION else ObjectType.ENEMY_DRONE
+        super().__init__(pos, ObjectShape.DRONE, t, vel)
         self.acc = pg.Vector2()
         self.turn_speed = random.randint(-100, 100)
-        self.target = player
+        self.owner = owner
 
     def update(self, dt: float, arena_radius: int, objects, sounds, **kwargs) -> bool:
+        # Convert to player drone if enemy owner was killed.
+        if self.type is ObjectType.ENEMY_DRONE and self.owner.health <= 0:
+            self.owner = kwargs["p"]
+            self.type = ObjectType.PLAYER_DRONE
+            self.color = COLORS[self.type]
+            # Reset turn speed for some visual flair.
+            self.turn_speed = random.randint(-100, 100)
+        # Rotate and orbit owner.
         self.angle += self.turn_speed * dt
         self.angle %= 360
-        self.acc = self.target.pos - self.pos
-        self.acc.scale_to_length(THRUST[self.shape])
-        self.vel += self.acc * dt
-        return super().update(dt, arena_radius, objects, sounds, **kwargs)
-
-
-class EnemyDrone(GameObject):
-    def __init__(self, enemy: GameObject):
-        pos = enemy.pos + utils.random_vector(100, 50)
-        vel = (enemy.pos - pos).rotate(random.choice((90, -90)))
-        vel.scale_to_length(random.randint(50, 200))
-        super().__init__(pos, ObjectShape.DRONE, ObjectType.ENEMY_DRONE, vel)
-        self.acc = pg.Vector2()
-        self.turn_speed = random.randint(-100, 100)
-        self.target = enemy
-
-    def update(self, dt: float, arena_radius: int, objects, sounds, **kwargs) -> bool:
-        if self.target.health <= 0:
-            self.target = kwargs["p"]
-        self.angle += self.turn_speed * dt
-        self.angle %= 360
-        self.acc = self.target.pos - self.pos
+        self.acc = self.owner.pos - self.pos
         self.acc.scale_to_length(THRUST[self.shape])
         self.vel += self.acc * dt
         return super().update(dt, arena_radius, objects, sounds, **kwargs)
@@ -585,7 +606,7 @@ class Player(GameObject):
             for _ in range(40):
                 vel_vector = utils.polar_vector(-random.randint(60, 120), random.randrange(360))
                 kwargs["d"].add(DebrisParticle(self.pos, vel_vector, self.color))
-            sounds.play(ASTEROID_BREAK_SOUND)
+            sounds.play(PLAYER_DEATH_SOUND)
             self.dead = True
             self.thrusting = False
         self.thrust_pos = self.pos + pg.Vector2(PLAYER_THRUSTER_POS).rotate(self.angle)

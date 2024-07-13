@@ -16,7 +16,9 @@ class Color:
     ARENA_EDGE = (64, 64, 64)
     BRIGHT_ARENA_EDGE = (100, 100, 100)
     DAMAGE_FLASH = (40, 0, 0)
-    ARENA_COLOR = (30, 0, 15)
+    SHIELD_FULL_COLOR = CYAN
+    SHIELD_EMPTY_COLOR = BLUE
+    ARENA_COLOR = (20, 0, 10)
     ARENA_COLORS = (
         (25, 0, 0),
         (25, 25, 0),

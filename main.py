@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf8 -*-
 import random
+import enum
 import math
 import functools
 import sys
@@ -17,7 +18,6 @@ from colors import Color
 APPLICATION_DIRECTORY = Path(__file__, "..").resolve()
 SOUND_DIRECTORY = APPLICATION_DIRECTORY / "sounds"
 FONT_PATH = APPLICATION_DIRECTORY / "Kenney_Future_Narrow.ttf"
-FIRE_GUN_SOUND = "fire_gun.wav"
 
 LEFT_MOUSE_BUTTON = 1
 MIDDLE_MOUSE_BUTTON = 2
@@ -26,13 +26,27 @@ WINDOWED_RESOLUTION = pg.Vector2(800, 600)
 CURSOR_RADIUS = 7
 FPS_CAP = 0
 
-ARENA_RADIUS = 1000
+GAME_TITLE = "POLYBOIDS"
 MIN_ARENA_EDGE_THICKNESS = 3
 ARENA_EDGE_THICKNESS = 10
-SCORE_MULTIPLIER = 1
 ARENA_PULSE_MULTIPLIER = 1
 ARENA_COLOR_MULTIPLIER = 0.5
 PLAYER_DAMAGE_FLASH_MS = 200
+
+
+class IndicatorStatus(enum.Enum):
+    NEVER = enum.auto()
+    ALWAYS = enum.auto()
+    EMPTY = enum.auto()
+
+
+INDICATOR_LINE = "OFFSCREEN INDICATORS:"
+INDICATORS = (IndicatorStatus.ALWAYS, IndicatorStatus.NEVER, IndicatorStatus.EMPTY)
+INDICATOR_TEXT = {
+    IndicatorStatus.NEVER: "              NEVER SHOW",
+    IndicatorStatus.ALWAYS: "            SHOW ALWAYS",
+    IndicatorStatus.EMPTY: "WHEN NO ENEMIES IN VIEW",
+}
 
 
 def main() -> None:
@@ -40,49 +54,49 @@ def main() -> None:
 
     sounds = utils.Sounds(SOUND_DIRECTORY, False)
 
-    utils.setup_window("Polybius Rex")
+    utils.setup_window(GAME_TITLE, "window_icon.png")
     fullscreen = True
     screen = utils.create_display(WINDOWED_RESOLUTION, fullscreen)
     clock = pg.time.Clock()
     font = pg.Font(FONT_PATH, 24)
+    big_font = pg.Font(FONT_PATH, 48)
+    title_text_surf = big_font.render(GAME_TITLE, True, Color.WHITE)
     cursor = pg.cursors.Cursor((CURSOR_RADIUS, CURSOR_RADIUS),
                                utils.make_circle_image(CURSOR_RADIUS, Color.WHITE, Color.BLACK, 3))
     pg.mouse.set_cursor(cursor)
 
+    arena_radius = 1000
     debug = False
     effects = True
+    show_indicators = IndicatorStatus.ALWAYS
     paused = True
     score = 0
     wave = 1
     death_timer = 0
+    wave_timer = 0
+    enemies_left = 0
+    restart_game = False
+    new_wave = False
+    new_wave_image = big_font.render(f"WAVE {wave}", True, Color.WHITE)
+    show_new_wave_image = 0
+
     arena_pulse = 0
     arena_color = 0
     pulse = 0
 
     # Create the pause menu buttons.
-    resume_button = sprites.Button(-150)
-    sounds_button = sprites.Button(-75)
-    color_button = sprites.Button(0)
-    fullscreen_button = sprites.Button(75)
-    quit_button = sprites.Button(150)
+    resume_button = sprites.Button(-130)
+    sounds_button = sprites.Button(-70)
+    indicator_button = sprites.Button(0, 70)
+    color_button = sprites.Button(70)
+    fullscreen_button = sprites.Button(130)
+    quit_button = sprites.Button(190)
 
     # The center of the arena is the light source, so you can always locate it.
     light_source = (0, 0)
 
-    game_objects = [
-        # Set up the level.
-        # sprites.Asteroid((200, 200), ObjectShape.OCTAGON),
-        # sprites.Asteroid((100, 100), ObjectShape.HEXAGON, (40, -20)),
-        # sprites.Asteroid((-100, -100), ObjectShape.SQUARE, (-10, -50)),
-        # sprites.Asteroid((-200, 200), ObjectShape.TRIANGLE, (10, 10)),
-        # sprites.Asteroid((-300, 0), ObjectShape.DRONE),
-
-        # Create and reference the player object.
-        player := sprites.Player((0, 0)),
-
-        # Create the enemies.
-        # sprites.Chaser((0, -400), ObjectShape.TRIANGLE, player),
-    ]
+    # Create and reference the player object.
+    game_objects = [player := sprites.Player((0, 0))]
     # Make menu button say "PLAY" instead of "RESUME".
     player.dead = True
 
@@ -117,11 +131,7 @@ def main() -> None:
                 if event.key == pg.K_ESCAPE or event.key == pg.K_SPACE:
                     paused = not paused
                     if not paused and player.dead:
-                        death_timer = 0
-                        player.health = 10
-                        player.dead = False
-                        player.pos = pg.Vector2()
-                        player.vel = pg.Vector2()
+                        restart_game = True
 
                 if event.key == pg.K_F3:
                     debug = not debug
@@ -132,6 +142,8 @@ def main() -> None:
 
                 if event.key == pg.K_m:
                     sounds.muted = not sounds.muted
+                    if not sounds.muted and paused:
+                        sounds.play("fire_gun.wav")
 
                 if event.key == pg.K_n:
                     effects = not effects
@@ -140,13 +152,16 @@ def main() -> None:
                 if event.button == LEFT_MOUSE_BUTTON and not player.dead:
                     player.thrusting = True
 
-                if event.button == MIDDLE_MOUSE_BUTTON and not paused:
-                    game_objects.append(sprites.PlayerDrone(player))
+                # Spawn enemies in debug mode.
+                if event.button == MIDDLE_MOUSE_BUTTON and not paused and debug:
+                    game_objects.append(o := sprites.Drone(player))
+                    o.shield = sprites.MAX_SHIELD
 
-                if event.button == RIGHT_MOUSE_BUTTON and not paused:
+                if event.button == RIGHT_MOUSE_BUTTON and not paused and debug:
                     world_coords = event.pos - camera + (random.randrange(20), random.randrange(20))  # noqa
                     shape = random.choice(sprites.RANDOM_SHAPES)
                     t = random.choice(sprites.RANDOM_TYPES)
+                    # t = ObjectType.GUNNER
                     d = random.random() + 0
                     o = None
                     if t is ObjectType.ASTEROID:
@@ -159,9 +174,11 @@ def main() -> None:
                         game_objects.append(o := sprites.Chaser(world_coords, shape, player))
                     if t is ObjectType.GUNNER:
                         game_objects.append(o := sprites.Gunner(world_coords, shape, player))
+                    o.shield = sprites.MAX_SHIELD if random.random() > 0.5 else 0
                     if o is not None and d > 0.5:
                         for _ in range(random.randint(2, 6)):
-                            game_objects.append(sprites.EnemyDrone(o))
+                            game_objects.append(d := sprites.Drone(o))
+                            d.shield = sprites.MAX_SHIELD if random.random() > 0.8 else 0
 
             if event.type == pg.MOUSEBUTTONUP:
                 if event.button == LEFT_MOUSE_BUTTON:
@@ -172,6 +189,46 @@ def main() -> None:
 
         # Update the game state.
         if not paused:
+            # Restart the game.
+            if restart_game:
+                restart_game = False
+                death_timer = 0
+                score = 0
+                wave = 1
+                new_wave_image = big_font.render(f"WAVE {wave}", True, Color.WHITE)
+                show_new_wave_image = pg.time.get_ticks()
+                new_wave = True
+                # Delete remaining particles.
+                thrust_particles.clear()
+                debris_particles.clear()
+                bullets.clear()
+                # Clear other objects.
+                game_objects = [player]
+                # Reset player.
+                player.health = sprites.HEALTH[player.shape]
+                player.dead = False
+                player.pos = pg.Vector2()
+                player.vel = pg.Vector2()
+
+            # Set up a new wave.
+            if new_wave:
+                new_wave = False
+                arena_radius = 900 + (wave * 100)
+                for _ in range(wave * 5):
+                    pos = utils.random_vector(arena_radius, 500)
+                    shape = random.choice(sprites.RANDOM_SHAPES)
+                    t = random.choice(sprites.RANDOM_TYPES)
+                    if t is ObjectType.ASTEROID:
+                        game_objects.append(o := sprites.Asteroid(pos, shape))
+                    if t is ObjectType.ORBITER:
+                        game_objects.append(o := sprites.Orbiter(pos, shape))
+                    if t is ObjectType.RUNNER:
+                        game_objects.append(o := sprites.Runner(pos, shape, player))
+                    if t is ObjectType.CHASER:
+                        game_objects.append(o := sprites.Chaser(pos, shape, player))
+                    if t is ObjectType.GUNNER:
+                        game_objects.append(o := sprites.Gunner(pos, shape, player))
+
             # Increase death timer.
             if player.dead:
                 death_timer += dt
@@ -193,18 +250,48 @@ def main() -> None:
                 thrust_particles.add(sprites.ThrustParticle(player.thrust_pos, player.vel + vel_vector))
 
             # Update game objects.
-            game_objects = [go for go in game_objects if go.update(dt, ARENA_RADIUS, game_objects, sounds,
+            game_objects = [go for go in game_objects if go.update(dt, arena_radius, game_objects, sounds,
                                                                    d=debris_particles, p=player, s=screen, c=camera,
                                                                    b=bullets)]
+            # Count remaining enemies.
+            enemies_left = len([go for go in game_objects if go.type in sprites.ENEMY_FACTION])
+
+            # Increase wave timer.
+            if not enemies_left and not player.dead:
+                wave_timer += dt
+                # If player has won for two seconds, set up the next wave.
+                if wave_timer > 2:
+                    wave_timer = 0
+                    wave += 1
+                    new_wave_image = big_font.render(f"WAVE {wave}", True, Color.WHITE)
+                    show_new_wave_image = pg.time.get_ticks()
+                    new_wave = True
+                    # Delete remaining particles.
+                    thrust_particles.clear()
+                    debris_particles.clear()
+                    bullets.clear()
+                    # Reset player.
+                    player.pos = pg.Vector2()
+                    player.vel = pg.Vector2()
+                    player.acc = pg.Vector2()
+                    player.thrusting = False
+                    # Reset player drones.
+                    for go in game_objects:
+                        if go.type is ObjectType.PLAYER_DRONE:
+                            go.pos = player.pos + utils.random_vector(100, 50)
+                            go.vel = (player.pos - go.pos).rotate(random.choice((90, -90)))
+                            go.vel.scale_to_length(random.randint(50, 200))
+                            go.acc = pg.Vector2()
+                            go.turn_speed = random.randint(-100, 100)
 
             # Update particles.
             if effects:
-                nebula_particles.update(dt, arena_radius=ARENA_RADIUS)
+                nebula_particles.update(dt, arena_radius=arena_radius)
             thrust_particles.update(dt)
             debris_particles.update(dt)
             # Update bullets and add scoring.
             scores = []
-            bullets.update(dt, arena_radius=ARENA_RADIUS, game_objects=game_objects, sounds=sounds, scores=scores)
+            bullets.update(dt, arena_radius=arena_radius, game_objects=game_objects, sounds=sounds, scores=scores)
             score += sum(scores)
         # Update the menu.
         else:
@@ -212,13 +299,13 @@ def main() -> None:
             if resume_button.update():
                 paused = False
                 if player.dead:
-                    death_timer = 0
-                    player.health = 10
-                    player.dead = False
-                    player.pos = pg.Vector2()
-                    player.vel = pg.Vector2()
+                    restart_game = True
             if sounds_button.update():
                 sounds.muted = not sounds.muted
+                if not sounds.muted:
+                    sounds.play("fire_gun.wav")
+            if indicator_button.update():
+                show_indicators = INDICATORS[(INDICATORS.index(show_indicators) + 1) % len(INDICATORS)]
             if color_button.update():
                 effects = not effects
             if fullscreen_button.update():
@@ -253,20 +340,16 @@ def main() -> None:
         if effects:
             color = pg.Color(Color.ARENA_EDGE).lerp(Color.BRIGHT_ARENA_EDGE, pulse)
             thickness = int(pg.math.lerp(ARENA_EDGE_THICKNESS, MIN_ARENA_EDGE_THICKNESS, pulse))
-            pg.draw.circle(screen, color, camera, ARENA_RADIUS, thickness)
+            pg.draw.circle(screen, color, camera, arena_radius, thickness)
         else:
-            pg.draw.circle(screen, Color.ARENA_EDGE, camera, ARENA_RADIUS, ARENA_EDGE_THICKNESS)
+            pg.draw.circle(screen, Color.ARENA_EDGE, camera, arena_radius, ARENA_EDGE_THICKNESS)
 
         # Draw the game objects.
-        enemies_left = 0
         enemies_not_on_screen = []
         for go in game_objects:
-            # Count remaining enemies for detecting wave win.
-            if go.type in sprites.ENEMY_FACTION:
-                enemies_left += 1
-                # Detect offscreen enemies.
-                if not go.on_screen(screen, camera):
-                    enemies_not_on_screen.append(go)
+            # Detect offscreen enemies.
+            if go.type in sprites.ENEMY_FACTION and not go.on_screen(screen, camera):
+                enemies_not_on_screen.append(go)
             # Draw the game object.
             go.draw(screen, light_source, camera)
             # Draw the collision circles.
@@ -278,32 +361,39 @@ def main() -> None:
         thrust_particles.draw(screen, camera)
         bullets.draw(screen, camera)
 
-        # Draw enemy indicators if none are onscreen.
+        # Draw offscreen enemy indicators.
         # Indicators are triangles that point towards the enemy.
-        if len(enemies_not_on_screen) == enemies_left:
-            for go in enemies_not_on_screen:
-                # The triangle point is at length 50 from the player.
-                draw_vec = go.pos - player.pos
-                draw_vec.scale_to_length(50)
-                # The triangle is filled if the enemy is approaching, hollow otherwise.
-                width = 2 if (draw_vec * (go.vel - player.vel)) > 0 else 0
-                # Create the two other points to make an equilateral triangle.
-                v1 = draw_vec.rotate(210)
-                v1.scale_to_length(15)
-                v2 = draw_vec.rotate(-210)
-                v2.scale_to_length(15)
-                # Center the triangle point in the screen.
-                draw_vec += screen_middle
-                # Draw the enemy indicator.
-                pg.draw.polygon(screen, go.color, (v1 + draw_vec, draw_vec, v2 + draw_vec), width)
+        if not player.dead and show_indicators is not IndicatorStatus.NEVER:
+            # Show the indicators if they should always be shown or if there are no enemies on screen.
+            if show_indicators is IndicatorStatus.ALWAYS or len(enemies_not_on_screen) == enemies_left:
+                for go in enemies_not_on_screen:
+                    # The triangle point is at length 50 from the player.
+                    draw_vec = go.pos - player.pos
+                    draw_vec.scale_to_length(50)
+                    # The triangle is filled if the enemy is approaching, hollow otherwise.
+                    width = 2 if (draw_vec * (go.vel - player.vel)) > 0 else 0
+                    # Create the two other points to make an equilateral triangle.
+                    v1 = draw_vec.rotate(210)
+                    v1.scale_to_length(15)
+                    v2 = draw_vec.rotate(-210)
+                    v2.scale_to_length(15)
+                    # Center the triangle point in the screen.
+                    draw_vec += screen_middle
+                    # Draw the enemy indicator.
+                    pg.draw.polygon(screen, go.color, (v1 + draw_vec, draw_vec, v2 + draw_vec), width)
 
         # Draw player damage flash.
-        hp_color = Color.GREEN
-        if pg.time.get_ticks() - player.last_hit < PLAYER_DAMAGE_FLASH_MS:
-            hp_color = Color.WHITE
+        flash_hp = False
+        if (pg.time.get_ticks() - player.last_hit < PLAYER_DAMAGE_FLASH_MS and
+                (player.shield_bypass or player.shield <= 0)):
+            flash_hp = True
             flash_surf = pg.Surface(screen.size)
             flash_surf.fill(Color.DAMAGE_FLASH)
             screen.blit(flash_surf, (0, 0), special_flags=pg.BLEND_ADD)
+
+        # Draw new wave image.
+        if pg.time.get_ticks() - show_new_wave_image < 2000 and not paused:
+            screen.blit(new_wave_image, new_wave_image.get_rect(centerx=screen.get_rect().centerx, y=150))
 
         # Draw HUD.
         score_surf = font.render(f"SCORE: {int(score)}", True, Color.WHITE)
@@ -311,18 +401,31 @@ def main() -> None:
 
         wave_surf = font.render(f"WAVE {wave}", True, Color.WHITE)
         screen.blit(wave_surf, wave_surf.get_rect(centerx=screen.get_rect().centerx))
-        wave_surf = font.render(f"{enemies_left} POLYBOIDS REMAIN", True, Color.WHITE)
+
+        plural = "S" if enemies_left != 1 else ""
+        plural2 = "S" if enemies_left == 1 else ""
+        wave_surf = font.render(f"{enemies_left} POLYBOID{plural} REMAIN{plural2}", True, Color.WHITE)
         screen.blit(wave_surf, wave_surf.get_rect(right=screen.width))
 
+        # Draw ship health.
         hp_surf = font.render("SHIP", True, Color.WHITE)
         screen.blit(hp_surf, (0, 0))
+        hp_color = Color.GREEN
         for i in range(player.health):
-            points = [pg.Vector2((hp_surf.width + 10) + (i * 15), hp_surf.height / 2) + p for p in sprites.HP_POLYGON]
-            pg.draw.polygon(screen, hp_color, points)
+            if i >= 15:
+                hp_color = Color.CYAN
+            if i >= 30:
+                hp_color = Color.WHITE
+            points = [pg.Vector2((hp_surf.width + 10) + ((i % 15) * 15), hp_surf.height / 2) + p
+                      for p in sprites.HP_POLYGON]
+            pg.draw.polygon(screen, Color.RED if flash_hp else hp_color, points)
 
+        # Draw menu buttons.
         if paused:
+            screen.blit(title_text_surf, title_text_surf.get_rect(centerx=screen.get_rect().centerx, y=80))
             resume_button.draw(screen, font, " (SPACE) PLAY" if player.dead else " (SPACE) RESUME")
             sounds_button.draw(screen, font, f" (M) SOUNDS: {"OFF" if sounds.muted else "ON"}")
+            indicator_button.draw(screen, font, f"{INDICATOR_LINE}\n{INDICATOR_TEXT[show_indicators]}")
             color_button.draw(screen, font, f" (N) ARENA EFFECTS: {"ON" if effects else "OFF"}")
             fullscreen_button.draw(screen, font, f" (F4) FULLSCREEN: {"ON" if fullscreen else "OFF"}")
             quit_button.draw(screen, font, " (CTRL+Q) QUIT", Color.RED)
@@ -332,7 +435,7 @@ def main() -> None:
             screen.blit(help_surf, help_surf.get_rect(centerx=screen.get_rect().centerx, bottom=screen.height))
 
         if debug:
-            fps_surf = font.render(f"F3 TO HIDE\n{clock.get_fps():.2f}", True, Color.WHITE, Color.BLACK)
+            fps_surf = font.render(f"{nebula_particles.size}\n{clock.get_fps():.2f}", True, Color.WHITE, Color.BLACK)
             screen.blit(fps_surf, (0, screen.height - fps_surf.height))
 
         pg.display.flip()
