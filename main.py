@@ -142,14 +142,6 @@ def main() -> None:
                 if event.button == LEFT_MOUSE_BUTTON and not player.dead:
                     player.thrusting = True
 
-                # Useful debug button.
-                if event.button == MIDDLE_MOUSE_BUTTON and not paused:
-                    world_coords = event.pos - camera  # noqa
-                    # wave = 15
-                    game_objects.append(sprites.PowerUp(world_coords, (0, 0), random.choice(sprites.RANDOM_POWERUPS)))
-                    # game_objects.append(o := sprites.Drone(player))
-                    # o.shield = sprites.MAX_SHIELD
-
                 if event.button == RIGHT_MOUSE_BUTTON:
                     force_show_indicators = True
 
@@ -199,26 +191,7 @@ def main() -> None:
                 for _ in range(2 + wave):
                     pos = utils.random_vector(arena_radius, 500)
                     shape = random.choice(sprites.RANDOM_SHAPES)
-                    if wave < 3:
-                        type_sequence = (ObjectType.ASTEROID, ObjectType.ORBITER)
-                    elif wave < 5:
-                        type_sequence = (ObjectType.ASTEROID, ObjectType.ORBITER, ObjectType.RUNNER)
-                    elif wave < 7:
-                        type_sequence = (ObjectType.ASTEROID, ObjectType.ORBITER, ObjectType.RUNNER, ObjectType.CHASER)
-                    elif wave < 9:
-                        type_sequence = (ObjectType.ASTEROID, ObjectType.ORBITER,
-                                         ObjectType.ASTEROID, ObjectType.ORBITER,
-                                         ObjectType.RUNNER, ObjectType.CHASER)
-                    elif wave < 11:
-                        type_sequence = (ObjectType.ASTEROID, ObjectType.ORBITER,
-                                         ObjectType.ASTEROID, ObjectType.ORBITER,
-                                         ObjectType.RUNNER, ObjectType.CHASER,
-                                         ObjectType.GUNNER)
-                    else:
-                        type_sequence = sprites.RANDOM_TYPES
-                    t = random.choice(type_sequence)
-                    s = random.random() * wave > 5
-                    d = random.random() * wave > 7
+                    t = random.choice(sprites.get_types(wave))
                     o = None
                     if t is ObjectType.ASTEROID:
                         game_objects.append(o := sprites.Asteroid(pos, shape))
@@ -230,13 +203,17 @@ def main() -> None:
                         game_objects.append(o := sprites.Chaser(pos, shape, player))
                     if t is ObjectType.GUNNER:
                         game_objects.append(o := sprites.Gunner(pos, shape, player))
-                    if o and s:
-                        o.shield = sprites.MAX_SHIELD
-                    if o and d:
-                        for _ in range(random.randint(1, 5)):
-                            game_objects.append(d := sprites.Drone(o))
-                            if random.random() > 0.8:
-                                d.shield = sprites.MAX_SHIELD
+                    if o:
+                        if wave > 6 and random.random() > 0.9:
+                            o.shield = sprites.MAX_SHIELD
+                        if wave > 9 and random.random() > 0.5:
+                            o.shield = sprites.MAX_SHIELD
+
+                        if wave > 5 and random.random() > 0.25:
+                            for _ in range(random.randint(1, 5 if wave > 9 else 2)):
+                                game_objects.append(d := sprites.Drone(o))
+                                if wave > 9 and random.random() > 0.5:
+                                    d.shield = sprites.MAX_SHIELD
 
             # Increase death timer.
             if player.dead:
@@ -251,7 +228,7 @@ def main() -> None:
             pulse = pg.math.remap(-1, 1, 0, 1, math.sin(arena_pulse))
 
             # Spawn particles.
-            if effects:
+            if effects and nebula_particles.size < 300:
                 nebula_particles.add(sprites.NebulaParticle())
             if player.thrusting:
                 vel_vector = utils.polar_vector(random.randint(150, 200),
@@ -261,7 +238,8 @@ def main() -> None:
 
             # Update game objects.
             game_objects = [go for go in game_objects if go.update(dt, arena_radius, game_objects, sounds,
-                                                                   d=debris_particles, p=player, s=screen, c=camera,
+                                                                   d=debris_particles, p=player, s=screen,
+                                                                   c=camera,  # noqa
                                                                    b=bullets, e=edge_portal)]
             # Count remaining enemies.
             enemies_left = len([go for go in game_objects if go.type in sprites.ENEMY_MARKERS])
@@ -286,8 +264,14 @@ def main() -> None:
                     player.acc = pg.Vector2()
                     player.thrusting = False
                     # Reset player drones.
+                    drone_count = 0
                     for go in game_objects:
                         if go.type is ObjectType.PLAYER_DRONE:
+                            drone_count += 1
+                            # Only allow player to carry 10 drones with them into the next wave.
+                            if drone_count > 10:
+                                go.health = 0
+                                go.be_silent = True
                             go.pos = player.pos + utils.random_vector(100, 50)
                             go.vel = (player.pos - go.pos).rotate(random.choice((90, -90)))
                             go.vel.scale_to_length(random.randint(50, 200))
@@ -387,14 +371,17 @@ def main() -> None:
         # Indicators are triangles that point towards the enemy.
         # This essentially creates a minimap for the player to locate the remaining enemies.
         # It also provides useful info like whether the enemy is approaching and how fast it is going.
+        screen_empty = len(enemies_not_on_screen) == enemies_left
         if not player.dead and ((show_indicators is not IndicatorStatus.NEVER) or force_show_indicators):
             # Show the indicators if they should always be shown or if there are no enemies on screen.
-            if show_indicators is IndicatorStatus.ALWAYS or \
-                    len(enemies_not_on_screen) == enemies_left or force_show_indicators:
+            if show_indicators is IndicatorStatus.ALWAYS or screen_empty or force_show_indicators:
                 for go in enemies_not_on_screen:
                     draw_vec = go.pos - player.pos
                     # The triangle is filled if the enemy is approaching, hollow otherwise.
                     width = 2 if (draw_vec * (go.vel - player.vel)) > 0 else 0
+                    # Only draw fleeing enemies when screen is empty or right-click is held.
+                    if width and not screen_empty and not force_show_indicators:
+                        continue
                     # The triangle is further away if the enemy is further away.
                     # Using a hard limit instead of scaling by arena radius provides more useful info.
                     # Enemies outside the max sensor range will have their indicators darkened.
@@ -474,7 +461,7 @@ def main() -> None:
             screen.blit(help_surf, help_surf.get_rect(centerx=screen.get_rect().centerx, bottom=screen.height))
 
         if debug:
-            fps_surf = font.render(f"{nebula_particles.size}\n{clock.get_fps():.2f}",
+            fps_surf = font.render(f"{bullets.size}\n{nebula_particles.size}\n{clock.get_fps():.2f}",
                                    True, Color.WHITE)
             screen.blit(fps_surf, (0, screen.height - fps_surf.height))
 

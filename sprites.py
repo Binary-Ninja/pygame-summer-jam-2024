@@ -159,6 +159,20 @@ class ObjectType(enum.Enum):
     PLAYER = enum.auto()
 
 
+def get_types(wave: int) -> Sequence[ObjectType]:
+    # First two waves have only basic enemies.
+    if wave <= 2:
+        return ObjectType.ASTEROID, ObjectType.ORBITER
+    # Then we introduce some runners.
+    if wave <= 5:
+        return ObjectType.ASTEROID, ObjectType.ORBITER, ObjectType.RUNNER
+    # Now for some chasers.
+    if wave <= 7:
+        return ObjectType.ASTEROID, ObjectType.ORBITER, ObjectType.RUNNER, ObjectType.CHASER
+    # Then all of them.
+    return RANDOM_TYPES
+
+
 class PowerUpType(enum.Enum):
     # Ship upgrades.
     HEALTH = enum.auto()
@@ -214,7 +228,7 @@ DROP_RATE = {
     ObjectType.PLAYER: 0,
     ObjectType.PLAYER_DRONE: 0,
     ObjectType.ENEMY_DRONE: 0,
-    ObjectType.ASTEROID: 0.2,
+    ObjectType.ASTEROID: 0.1,
     ObjectType.ORBITER: 0.2,
     ObjectType.RUNNER: 0.5,
     ObjectType.CHASER: 0.5,
@@ -385,6 +399,8 @@ class Bullet(utils.Particle):
         self.vel = pg.Vector2(vel)  # noqa
         self.owner = owner
         self.color = owner.color
+        self.start_time = pg.time.get_ticks()
+        self.life_time = 4000
         if owner.type in PLAYER_FACTION:
             self.color = Color.YELLOW if player.rapid_fire else player.color  # Drones also fire green bullets.
             self.radius = RAPIDFIRE_RADIUS if player.rapid_fire else PLAYER_BULLET_RADIUS
@@ -399,6 +415,8 @@ class Bullet(utils.Particle):
             self.damage = ENEMY_BULLET_DAMAGE
 
     def update(self, dt: float, *args, **kwargs) -> bool:
+        if pg.time.get_ticks() - self.start_time >= self.life_time:
+            return False
         # Despawn outside of arena bounds.
         if self.pos.length_squared() > kwargs["arena_radius"] ** 2:
             return False
@@ -492,6 +510,7 @@ class GameObject:
         self.last_hit = 0
         self.shield_bypass = False
         self.shield = 0
+        self.be_silent = False
 
     def apply_powerup(self, type_: PowerUpType, sounds, objects):
         # Could possibly add certain powerup abilities to enemies, but very unlikely.
@@ -503,11 +522,12 @@ class GameObject:
     def update(self, dt: float, arena_radius: int, objects, sounds, **kwargs) -> bool:
         if self.health <= 0 and self.type is not ObjectType.PLAYER:
             if self.type is not ObjectType.POWER_UP:
-                for _ in range(40):
-                    vel_vector = utils.polar_vector(-random.randint(60, 120), random.randrange(360))
-                    kwargs["d"].add(DebrisParticle(self.pos, vel_vector, self.color))
-                if self.on_screen(kwargs["s"], kwargs["c"]) or self.shield_bypass:
-                    sounds.play(ASTEROID_BREAK_SOUND)
+                if not self.be_silent:
+                    for _ in range(40):
+                        vel_vector = utils.polar_vector(-random.randint(60, 120), random.randrange(360))
+                        kwargs["d"].add(DebrisParticle(self.pos, vel_vector, self.color))
+                    if self.on_screen(kwargs["s"], kwargs["c"]) or self.shield_bypass:
+                        sounds.play(ASTEROID_BREAK_SOUND)
                 # Spawn powerups if not a drone.
                 if self.type in ENEMY_FACTION and self.type is not ObjectType.ENEMY_DRONE:
                     if random.random() > DROP_RATE[self.type]:
@@ -841,15 +861,17 @@ class Player(GameObject):
         self.laser = 0.0
 
     def apply_powerup(self, type_: PowerUpType, sounds, objects):
-        sounds.play(POWERUP_SOUND)
+        d_count = 1
         if type_ is PowerUpType.HEALTH:
             self.health += 1
         if type_ is PowerUpType.SHIELD:
             self.shield = MAX_SHIELD
         if type_ is PowerUpType.SHIELD_DRONE:
+            d_count = 0
             for go in objects:
                 if go.type is ObjectType.PLAYER_DRONE:
                     go.shield = MAX_SHIELD
+                    d_count += 1
         if type_ is PowerUpType.DRONE:
             objects.append(Drone(self))
         if type_ is PowerUpType.BULLET_DAMAGE:
@@ -863,12 +885,17 @@ class Player(GameObject):
         if type_ is PowerUpType.PHASE:
             self.phase = 10.0
         if type_ is PowerUpType.BULLET_DRONES:
+            d_count = 0
             for go in objects:
                 if go.type is ObjectType.PLAYER_DRONE:
                     go.bullets = True
                     go.color = COLORS[self.type]
+                    d_count += 1
         if type_ is PowerUpType.LASER:
             self.laser = 2.0
+        # Don't play sounds if it is a drone powerup and you have no drones.
+        if d_count:
+            sounds.play(POWERUP_SOUND)
 
     def decrease_bullet_pups(self):
         self.bullet_damage_up = max(0, self.bullet_damage_up - 1)
@@ -912,8 +939,8 @@ class Player(GameObject):
     def draw(self, screen: pg.Surface, light_source: Sequence[float], camera: Sequence[float]):
         if not self.dead:
             if self.phase:
-                self.color = Color.PHASE_COLOR
+                self.color = pg.Color(Color.BLUE).lerp(Color.PHASE_COLOR, self.phase / 10)
                 if self.thrusting:
-                    self.color = Color.PHASING_COLOR
+                    self.color = pg.Color((20, 20, 128)).lerp(Color.PHASING_COLOR, self.phase / 10)
             super().draw(screen, light_source, camera)
             self.color = COLORS[self.type]
