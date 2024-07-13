@@ -461,7 +461,7 @@ def main() -> None:
             screen.blit(help_surf, help_surf.get_rect(centerx=screen.get_rect().centerx, bottom=screen.height))
 
         if debug:
-            fps_surf = font.render(f"{bullets.size}\n{nebula_particles.size}\n{clock.get_fps():.2f}",
+            fps_surf = font.render(f"F3 TO HIDE\n{nebula_particles.size}\n{clock.get_fps():.2f}",
                                    True, Color.WHITE)
             screen.blit(fps_surf, (0, screen.height - fps_surf.height))
 
