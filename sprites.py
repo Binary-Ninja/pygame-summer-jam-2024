@@ -194,6 +194,7 @@ class PowerUpType(enum.Enum):
 
 BASIC_POWERUPS = (
     PowerUpType.HEALTH,
+    PowerUpType.HEALTH,
     PowerUpType.THRUST,
 )
 
@@ -228,7 +229,7 @@ DROP_RATE = {
     ObjectType.PLAYER: 0,
     ObjectType.PLAYER_DRONE: 0,
     ObjectType.ENEMY_DRONE: 0,
-    ObjectType.ASTEROID: 0.1,
+    ObjectType.ASTEROID: 0.2,
     ObjectType.ORBITER: 0.2,
     ObjectType.RUNNER: 0.5,
     ObjectType.CHASER: 0.5,
@@ -533,7 +534,7 @@ class GameObject:
                         sounds.play(ASTEROID_BREAK_SOUND)
                 # Spawn powerups if not a drone.
                 if self.type in ENEMY_FACTION and self.type is not ObjectType.ENEMY_DRONE:
-                    if random.random() > DROP_RATE[self.type]:
+                    if random.random() < DROP_RATE[self.type]:
                         loot = LOOT[self.type]
                         if self.shield:
                             loot += (PowerUpType.SHIELD, PowerUpType.SHIELD_DRONE)
