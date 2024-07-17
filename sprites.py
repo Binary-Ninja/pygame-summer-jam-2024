@@ -654,7 +654,7 @@ class GameObject:
             if flash_effect and not self.shield_bypass:
                 width = 4
                 color = Color.WHITE
-            pg.draw.circle(screen, color, self.pos + camera, self.radius + 10, width)  # noqa
+            pg.draw.aacircle(screen, color, self.pos + camera, self.radius + 10, width)  # noqa
 
 
 class Asteroid(GameObject):
@@ -719,14 +719,14 @@ class PowerUp(GameObject):
             pg.draw.polygon(screen, color, [self.pos + p + camera for p in DRONE_POLYGON])  # noqa
         if self.p_type is PowerUpType.BULLET_DAMAGE:
             color = Color.CYAN
-            pg.draw.circle(screen, color, self.pos + camera, PLAYER_BULLET_RADIUS)  # noqa
+            pg.draw.aacircle(screen, color, self.pos + camera, PLAYER_BULLET_RADIUS)  # noqa
         if self.p_type is PowerUpType.RAPID_FIRE:
             color = Color.YELLOW
-            pg.draw.circle(screen, color, self.pos + camera, RAPIDFIRE_RADIUS)  # noqa
+            pg.draw.aacircle(screen, color, self.pos + camera, RAPIDFIRE_RADIUS)  # noqa
         if self.p_type is PowerUpType.BULLET_SPEED:
             color = Color.WHITE
-            pg.draw.circle(screen, color, self.pos + camera, PLAYER_BULLET_RADIUS)  # noqa
-        pg.draw.circle(screen, color, self.pos + camera, self.radius, radius)  # noqa
+            pg.draw.aacircle(screen, color, self.pos + camera, PLAYER_BULLET_RADIUS)  # noqa
+        pg.draw.aacircle(screen, color, self.pos + camera, self.radius, radius)  # noqa
 
 
 class Orbiter(GameObject):

@@ -349,9 +349,9 @@ def main() -> None:
         if effects:
             color = pg.Color(Color.ARENA_EDGE).lerp(Color.BRIGHT_ARENA_EDGE, pulse)
             thickness = int(pg.math.lerp(ARENA_EDGE_THICKNESS, MIN_ARENA_EDGE_THICKNESS, pulse))
-            pg.draw.circle(screen, color, camera, arena_radius, thickness)
+            pg.draw.aacircle(screen, color, camera, arena_radius, thickness)
         else:
-            pg.draw.circle(screen, Color.ARENA_EDGE, camera, arena_radius, ARENA_EDGE_THICKNESS)
+            pg.draw.aacircle(screen, Color.ARENA_EDGE, camera, arena_radius, ARENA_EDGE_THICKNESS)
 
         # Draw the game objects.
         enemies_not_on_screen = []
